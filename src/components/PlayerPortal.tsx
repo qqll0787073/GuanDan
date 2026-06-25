@@ -7,7 +7,7 @@ import {
   generateDecks, shuffleCards, sortCards, canBeat, analyzeCombination, makeBotMove, calculateGameScore, getNextLevel 
 } from '../utils/guandanEngine';
 import { 
-  User as UserIcon, LogOut, Video, VideoOff, Mic, MicOff, Users, ArrowRight, Shield, RefreshCw, Layers, SortAsc, HelpCircle, Eye, ChevronRight, Edit2, Play, Circle, Trophy, History
+  User as UserIcon, LogOut, Video, VideoOff, Mic, MicOff, Users, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Shield, RefreshCw, Layers, SortAsc, HelpCircle, Eye, ChevronRight, Edit2, Play, Circle, Trophy, History
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -89,6 +89,8 @@ export default function PlayerPortal({
   const [game, setGame] = useState<GameState | null>(null);
   const [selectedCards, setSelectedCards] = useState<{ [id: string]: boolean }>({});
   const [sortStrategy, setSortStrategy] = useState<'rank' | 'suit' | 'combo'>('rank');
+  const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
+  const [dragOverCardId, setDragOverCardId] = useState<string | null>(null);
 
   // Interactive panels
   const [showHistory, setShowHistory] = useState(false);
@@ -290,6 +292,152 @@ export default function PlayerPortal({
       ...prev,
       [cardId]: !prev[cardId]
     }));
+  };
+
+  // Drag and Drop card reordering
+  const handleCardDrop = (draggedId: string, targetId: string) => {
+    if (!game) return;
+    const cards = [...game.players[0].cards];
+    const dragIdx = cards.findIndex(c => c.id === draggedId);
+    const dropIdx = cards.findIndex(c => c.id === targetId);
+    if (dragIdx !== -1 && dropIdx !== -1 && dragIdx !== dropIdx) {
+      const [draggedCard] = cards.splice(dragIdx, 1);
+      cards.splice(dropIdx, 0, draggedCard);
+      setGame(prev => {
+        if (!prev) return null;
+        const updatedPlayers = prev.players.map((p, idx) => {
+          if (idx === 0) {
+            return { ...p, cards };
+          }
+          return p;
+        });
+        return { ...prev, players: updatedPlayers };
+      });
+    }
+  };
+
+  const handleCardDropToRow = (draggedId: string, rowNum: 1 | 2) => {
+    if (!game) return;
+    const cards = [...game.players[0].cards];
+    const dragIdx = cards.findIndex(c => c.id === draggedId);
+    if (dragIdx === -1) return;
+
+    const [draggedCard] = cards.splice(dragIdx, 1);
+    const midPoint = Math.ceil((cards.length + 1) / 2);
+    
+    if (rowNum === 1) {
+      const insertIdx = Math.max(0, midPoint - 1);
+      cards.splice(insertIdx, 0, draggedCard);
+    } else {
+      cards.push(draggedCard);
+    }
+
+    setGame(prev => {
+      if (!prev) return null;
+      const updatedPlayers = prev.players.map((p, idx) => {
+        if (idx === 0) {
+          return { ...p, cards };
+        }
+        return p;
+      });
+      return { ...prev, players: updatedPlayers };
+    });
+  };
+
+  const handleMoveSelectedLeft = () => {
+    if (!game) return;
+    const cards = [...game.players[0].cards];
+    for (let i = 1; i < cards.length; i++) {
+      if (selectedCards[cards[i].id] && !selectedCards[cards[i - 1].id]) {
+        const temp = cards[i];
+        cards[i] = cards[i - 1];
+        cards[i - 1] = temp;
+      }
+    }
+    setGame(prev => {
+      if (!prev) return null;
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      return { ...prev, players: updatedPlayers };
+    });
+  };
+
+  const handleMoveSelectedRight = () => {
+    if (!game) return;
+    const cards = [...game.players[0].cards];
+    for (let i = cards.length - 2; i >= 0; i--) {
+      if (selectedCards[cards[i].id] && !selectedCards[cards[i + 1].id]) {
+        const temp = cards[i];
+        cards[i] = cards[i + 1];
+        cards[i + 1] = temp;
+      }
+    }
+    setGame(prev => {
+      if (!prev) return null;
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      return { ...prev, players: updatedPlayers };
+    });
+  };
+
+  const handleMoveSelectedToUpperRow = () => {
+    if (!game) return;
+    const cards = [...game.players[0].cards];
+    const midPoint = Math.ceil(cards.length / 2);
+    
+    const selectedLowerIndices: number[] = [];
+    for (let i = midPoint; i < cards.length; i++) {
+      if (selectedCards[cards[i].id]) {
+        selectedLowerIndices.push(i);
+      }
+    }
+
+    if (selectedLowerIndices.length === 0) return;
+
+    const movedCards: Card[] = [];
+    for (let i = selectedLowerIndices.length - 1; i >= 0; i--) {
+      const idx = selectedLowerIndices[i];
+      const [card] = cards.splice(idx, 1);
+      movedCards.unshift(card);
+    }
+
+    const newInsertPoint = Math.ceil((cards.length + movedCards.length) / 2) - movedCards.length;
+    const insertIdx = Math.max(0, newInsertPoint);
+    cards.splice(insertIdx, 0, ...movedCards);
+
+    setGame(prev => {
+      if (!prev) return null;
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      return { ...prev, players: updatedPlayers };
+    });
+  };
+
+  const handleMoveSelectedToLowerRow = () => {
+    if (!game) return;
+    const cards = [...game.players[0].cards];
+    const midPoint = Math.ceil(cards.length / 2);
+
+    const selectedUpperIndices: number[] = [];
+    for (let i = 0; i < midPoint; i++) {
+      if (selectedCards[cards[i].id]) {
+        selectedUpperIndices.push(i);
+      }
+    }
+
+    if (selectedUpperIndices.length === 0) return;
+
+    const movedCards: Card[] = [];
+    for (let i = selectedUpperIndices.length - 1; i >= 0; i--) {
+      const idx = selectedUpperIndices[i];
+      const [card] = cards.splice(idx, 1);
+      movedCards.unshift(card);
+    }
+
+    cards.push(...movedCards);
+
+    setGame(prev => {
+      if (!prev) return null;
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      return { ...prev, players: updatedPlayers };
+    });
   };
 
   // Player action: Play selected cards
@@ -1171,6 +1319,42 @@ export default function PlayerPortal({
 
                             <div className="w-px h-6 bg-slate-800"></div>
 
+                            {/* Reordering/Adjustment helper buttons */}
+                            <button
+                              onClick={handleMoveSelectedLeft}
+                              disabled={!Object.values(selectedCards).some(Boolean)}
+                              className="p-2 rounded-lg border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                              title={language === 'zh' ? '选中的牌向左平移' : 'Move selected cards left'}
+                            >
+                              <ArrowLeft className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={handleMoveSelectedRight}
+                              disabled={!Object.values(selectedCards).some(Boolean)}
+                              className="p-2 rounded-lg border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                              title={language === 'zh' ? '选中的牌向右平移' : 'Move selected cards right'}
+                            >
+                              <ArrowRight className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={handleMoveSelectedToUpperRow}
+                              disabled={!Object.values(selectedCards).some(Boolean)}
+                              className="p-2 rounded-lg border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                              title={language === 'zh' ? '选中的牌移至上行' : 'Move selected cards to top row'}
+                            >
+                              <ArrowUp className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={handleMoveSelectedToLowerRow}
+                              disabled={!Object.values(selectedCards).some(Boolean)}
+                              className="p-2 rounded-lg border bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                              title={language === 'zh' ? '选中的牌移至下行' : 'Move selected cards to bottom row'}
+                            >
+                              <ArrowDown className="w-4 h-4" />
+                            </button>
+
+                            <div className="w-px h-6 bg-slate-800"></div>
+
                             <button
                               onClick={handlePass}
                               disabled={game.activePlayerIndex !== 0}
@@ -1191,57 +1375,206 @@ export default function PlayerPortal({
                       </div>
 
                       {/* ACTIVE HAND DISPLAY AREA */}
-                      <div className="mt-6 flex flex-col items-center">
-                        <span className="text-[10px] font-bold text-slate-500 font-mono tracking-widest uppercase mb-3">
-                          {t('yourHand')} ({game.players[0].cards.length} / 27)
+                      <div className="mt-6 flex flex-col items-center w-full">
+                        <span className="text-[10px] font-bold text-slate-500 font-mono tracking-widest uppercase mb-3 text-center px-4">
+                          {t('yourHand')} ({game.players[0].cards.length} / 27) {language === 'zh' ? '· 每行最多20张 · 允许任意拖拽排序或使用平移按钮' : '· Max 20/row · Drag cards to reorder or use shift buttons'}
                         </span>
 
-                        <div className="w-full overflow-x-auto pb-4 px-4 flex justify-start sm:justify-center">
-                          <div className="flex -space-x-4 sm:-space-x-5 min-w-max py-2">
-                            {game.players[0].cards.map((card, idx) => {
-                              const isSel = !!selectedCards[card.id];
-                              
-                              return (
-                                <motion.div
-                                  key={card.id}
-                                  onClick={() => toggleSelectCard(card.id)}
-                                  className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-transform duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'}`}
-                                  style={{ zIndex: idx }}
-                                  whileTap={{ scale: 0.95 }}
+                        <div className="w-full overflow-x-auto pb-4 px-4 flex flex-col items-center space-y-4">
+                          {(() => {
+                            const cards = game.players[0].cards;
+                            const midPoint = Math.ceil(cards.length / 2);
+                            const row1Cards = cards.slice(0, midPoint);
+                            const row2Cards = cards.slice(midPoint);
+
+                            return (
+                              <>
+                                {/* Row 1 */}
+                                <div 
+                                  onDragOver={(e) => e.preventDefault()}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    const draggedId = e.dataTransfer.getData('text/plain');
+                                    if (draggedId) {
+                                      handleCardDropToRow(draggedId, 1);
+                                    }
+                                  }}
+                                  className="flex -space-x-4 sm:-space-x-5 min-w-max py-2 px-6 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800/60 min-h-[110px] sm:min-h-[130px] items-center justify-center transition-colors hover:bg-slate-900/60"
                                 >
-                                  {/* Top rank value and suit */}
-                                  <div className="flex flex-col items-start leading-none">
-                                    <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
-                                      {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
-                                    </span>
-                                    <span className="text-[9px] sm:text-[10px] mt-0.5">
-                                      {card.suit !== 'jokers' && renderSuitIcon(card.suit, card.value)}
-                                    </span>
-                                  </div>
+                                  {row1Cards.length === 0 ? (
+                                    <span className="text-xs text-slate-600 font-mono italic px-8">{language === 'zh' ? '拖拽卡牌至此行 (最多20张)' : 'Drag cards here (Max 20)'}</span>
+                                  ) : (
+                                    row1Cards.map((card) => {
+                                      const globalIdx = cards.findIndex(c => c.id === card.id);
+                                      const isSel = !!selectedCards[card.id];
+                                      const isDragged = draggedCardId === card.id;
+                                      const isDragOver = dragOverCardId === card.id;
 
-                                  {/* Center decorative suit / status icon */}
-                                  <div className="text-center">
-                                    {card.isWild ? (
-                                      <span className="text-[8px] bg-red-100 text-red-600 px-1 py-0.5 rounded-full font-bold uppercase leading-none">WILD</span>
-                                    ) : card.isLevelCard ? (
-                                      <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-bold uppercase leading-none">LEVEL</span>
-                                    ) : (
-                                      <span className="text-[14px] sm:text-[16px] opacity-70">
-                                        {renderSuitIcon(card.suit, card.value)}
-                                      </span>
-                                    )}
-                                  </div>
+                                      return (
+                                        <motion.div
+                                          key={card.id}
+                                          draggable
+                                          onDragStart={(e) => {
+                                            e.dataTransfer.setData('text/plain', card.id);
+                                            setDraggedCardId(card.id);
+                                          }}
+                                          onDragEnd={() => {
+                                            setDraggedCardId(null);
+                                            setDragOverCardId(null);
+                                          }}
+                                          onDragOver={(e) => {
+                                            e.preventDefault();
+                                            if (dragOverCardId !== card.id) {
+                                              setDragOverCardId(card.id);
+                                            }
+                                          }}
+                                          onDragLeave={() => {
+                                            if (dragOverCardId === card.id) {
+                                              setDragOverCardId(null);
+                                            }
+                                          }}
+                                          onDrop={(e) => {
+                                            e.preventDefault();
+                                            const draggedId = e.dataTransfer.getData('text/plain');
+                                            if (draggedId) {
+                                              handleCardDrop(draggedId, card.id);
+                                            }
+                                            setDragOverCardId(null);
+                                          }}
+                                          onClick={() => toggleSelectCard(card.id)}
+                                          className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
+                                          style={{ zIndex: globalIdx }}
+                                          whileTap={{ scale: 0.95 }}
+                                        >
+                                          {/* Top rank value and suit */}
+                                          <div className="flex flex-col items-start leading-none">
+                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
+                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
+                                            </span>
+                                            <span className="text-[9px] sm:text-[10px] mt-0.5">
+                                              {card.suit !== 'jokers' && renderSuitIcon(card.suit, card.value)}
+                                            </span>
+                                          </div>
 
-                                  {/* Bottom reversed rank */}
-                                  <div className="flex items-end justify-end leading-none rotate-180">
-                                    <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
-                                      {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
-                                    </span>
-                                  </div>
-                                </motion.div>
-                              );
-                            })}
-                          </div>
+                                          {/* Center decorative suit / status icon */}
+                                          <div className="text-center">
+                                            {card.isWild ? (
+                                              <span className="text-[8px] bg-red-100 text-red-600 px-1 py-0.5 rounded-full font-bold uppercase leading-none">WILD</span>
+                                            ) : card.isLevelCard ? (
+                                              <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-bold uppercase leading-none">LEVEL</span>
+                                            ) : (
+                                              <span className="text-[14px] sm:text-[16px] opacity-70">
+                                                {renderSuitIcon(card.suit, card.value)}
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          {/* Bottom reversed rank */}
+                                          <div className="flex items-end justify-end leading-none rotate-180">
+                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
+                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
+                                            </span>
+                                          </div>
+                                        </motion.div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+
+                                {/* Row 2 */}
+                                <div 
+                                  onDragOver={(e) => e.preventDefault()}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    const draggedId = e.dataTransfer.getData('text/plain');
+                                    if (draggedId) {
+                                      handleCardDropToRow(draggedId, 2);
+                                    }
+                                  }}
+                                  className="flex -space-x-4 sm:-space-x-5 min-w-max py-2 px-6 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800/60 min-h-[110px] sm:min-h-[130px] items-center justify-center transition-colors hover:bg-slate-900/60"
+                                >
+                                  {row2Cards.length === 0 ? (
+                                    <span className="text-xs text-slate-600 font-mono italic px-8">{language === 'zh' ? '拖拽卡牌至此行 (最多20张)' : 'Drag cards here (Max 20)'}</span>
+                                  ) : (
+                                    row2Cards.map((card) => {
+                                      const globalIdx = cards.findIndex(c => c.id === card.id);
+                                      const isSel = !!selectedCards[card.id];
+                                      const isDragged = draggedCardId === card.id;
+                                      const isDragOver = dragOverCardId === card.id;
+
+                                      return (
+                                        <motion.div
+                                          key={card.id}
+                                          draggable
+                                          onDragStart={(e) => {
+                                            e.dataTransfer.setData('text/plain', card.id);
+                                            setDraggedCardId(card.id);
+                                          }}
+                                          onDragEnd={() => {
+                                            setDraggedCardId(null);
+                                            setDragOverCardId(null);
+                                          }}
+                                          onDragOver={(e) => {
+                                            e.preventDefault();
+                                            if (dragOverCardId !== card.id) {
+                                              setDragOverCardId(card.id);
+                                            }
+                                          }}
+                                          onDragLeave={() => {
+                                            if (dragOverCardId === card.id) {
+                                              setDragOverCardId(null);
+                                            }
+                                          }}
+                                          onDrop={(e) => {
+                                            e.preventDefault();
+                                            const draggedId = e.dataTransfer.getData('text/plain');
+                                            if (draggedId) {
+                                              handleCardDrop(draggedId, card.id);
+                                            }
+                                            setDragOverCardId(null);
+                                          }}
+                                          onClick={() => toggleSelectCard(card.id)}
+                                          className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
+                                          style={{ zIndex: globalIdx }}
+                                          whileTap={{ scale: 0.95 }}
+                                        >
+                                          {/* Top rank value and suit */}
+                                          <div className="flex flex-col items-start leading-none">
+                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
+                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
+                                            </span>
+                                            <span className="text-[9px] sm:text-[10px] mt-0.5">
+                                              {card.suit !== 'jokers' && renderSuitIcon(card.suit, card.value)}
+                                            </span>
+                                          </div>
+
+                                          {/* Center decorative suit / status icon */}
+                                          <div className="text-center">
+                                            {card.isWild ? (
+                                              <span className="text-[8px] bg-red-100 text-red-600 px-1 py-0.5 rounded-full font-bold uppercase leading-none">WILD</span>
+                                            ) : card.isLevelCard ? (
+                                              <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-bold uppercase leading-none">LEVEL</span>
+                                            ) : (
+                                              <span className="text-[14px] sm:text-[16px] opacity-70">
+                                                {renderSuitIcon(card.suit, card.value)}
+                                              </span>
+                                            )}
+                                          </div>
+
+                                          {/* Bottom reversed rank */}
+                                          <div className="flex items-end justify-end leading-none rotate-180">
+                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
+                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
+                                            </span>
+                                          </div>
+                                        </motion.div>
+                                      );
+                                    })
+                                  )}
+                                </div>
+                              </>
+                            );
+                          })()}
                         </div>
                       </div>
 
