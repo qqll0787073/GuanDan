@@ -4,7 +4,7 @@ import {
 } from '../types';
 import { getTranslation } from '../i18n';
 import { 
-  generateDecks, shuffleCards, sortCards, canBeat, analyzeCombination, makeBotMove, calculateGameScore, getNextLevel 
+  generateDecks, shuffleCards, sortCards, canBeat, analyzeCombination, makeBotMove, calculateGameScore, getNextLevel, adjustRanksForLevel 
 } from '../utils/guandanEngine';
 import { 
   User as UserIcon, LogOut, Video, VideoOff, Mic, MicOff, Users, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Shield, RefreshCw, Layers, SortAsc, HelpCircle, Eye, ChevronRight, Edit2, Play, Circle, Trophy, History, Cpu
@@ -69,6 +69,22 @@ export function advanceScoreboardLevel(currentLevel: string, advanceBy: number):
   
   const nextIndex = Math.min(currentIndex + advanceBy, SCOREBOARD_SEQUENCE.length - 1);
   return SCOREBOARD_SEQUENCE[nextIndex];
+}
+
+export interface TributeItem {
+  giverSeat: number;
+  receiverSeat: number;
+  givenCard?: Card;
+  returnedCard?: Card;
+  status: 'pending_tribute' | 'pending_return' | 'completed';
+}
+
+export interface TributeState {
+  isActive: boolean;
+  isResisted: boolean;
+  resistedReason?: string;
+  items: TributeItem[];
+  startingPlayerIndex: number;
 }
 
 interface PlayerPortalProps {
@@ -149,6 +165,8 @@ export default function PlayerPortal({
   const [manualNotes, setManualNotes] = useState('');
   const [lastFinisherSeat, setLastFinisherSeat] = useState<number | null>(null);
   const [lastWinnerSeat, setLastWinnerSeat] = useState<number | null>(null);
+  const [lastOrderedSeats, setLastOrderedSeats] = useState<number[] | null>(null);
+  const [tribute, setTribute] = useState<TributeState | null>(null);
 
   const t = (key: string) => getTranslation(key, language);
 
@@ -342,6 +360,8 @@ export default function PlayerPortal({
     setSelectedCards({});
     setLastFinisherSeat(null);
     setLastWinnerSeat(null);
+    setLastOrderedSeats(null);
+    setTribute(null);
   };
 
   // Simulate online players joining the room lounge over time
@@ -577,6 +597,27 @@ export default function PlayerPortal({
     }
   };
 
+  // Select a bot card to return
+  const selectBotReturnCard = (hand: Card[], levelCard: string): Card => {
+    // Cards between 2 and 10 and not level card
+    const eligible = hand.filter(c => 
+      ['2', '3', '4', '5', '6', '7', '8', '9', '10'].includes(c.value) && 
+      c.value !== levelCard && 
+      c.suit !== 'jokers'
+    );
+    if (eligible.length > 0) {
+      const sorted = [...eligible].sort((a, b) => a.rank - b.rank);
+      return sorted[0];
+    }
+    const fallbackEligible = hand.filter(c => c.value !== levelCard && c.suit !== 'jokers');
+    if (fallbackEligible.length > 0) {
+      const sorted = [...fallbackEligible].sort((a, b) => a.rank - b.rank);
+      return sorted[0];
+    }
+    const sorted = [...hand].sort((a, b) => a.rank - b.rank);
+    return sorted[0];
+  };
+
   // Deal next round of cards
   const handleNextRoundDeal = () => {
     if (!game) return;
@@ -586,16 +627,179 @@ export default function PlayerPortal({
     const shuffled = shuffleCards(allCards);
 
     // Deal 27 cards to each of the 4 players
-    const hand0 = shuffled.slice(0, 27);
-    const hand1 = shuffled.slice(27, 54);
-    const hand2 = shuffled.slice(54, 81);
-    const hand3 = shuffled.slice(81, 108);
+    let hand0 = shuffled.slice(0, 27);
+    let hand1 = shuffled.slice(27, 54);
+    let hand2 = shuffled.slice(54, 81);
+    let hand3 = shuffled.slice(81, 108);
 
-    // Starting player: Previous winner, or Hearts 2 in the deck as fallback
-    let startingPlayerIndex = 0;
-    if (lastWinnerSeat !== null) {
-      startingPlayerIndex = lastWinnerSeat;
+    let isResisted = false;
+    let resistedReason = "";
+    let tributeItems: TributeItem[] = [];
+    let startingPlayerIndex = lastWinnerSeat !== null ? lastWinnerSeat : 0;
+
+    // Check if we have previous round's finished order
+    if (lastOrderedSeats && lastOrderedSeats.length === 4) {
+      const t1 = lastOrderedSeats[0]; // 1st
+      const t2 = lastOrderedSeats[1]; // 2nd
+      const t3 = lastOrderedSeats[2]; // 3rd
+      const t4 = lastOrderedSeats[3]; // 4th
+
+      // Team A is seats 0,2; Team B is seats 1,3
+      const isDoubleDown = (t1 % 2) === (t2 % 2);
+
+      // Check for Anti-tribute (抗贡)
+      if (isDoubleDown) {
+        const hand3rd = t3 === 0 ? hand0 : t3 === 1 ? hand1 : t3 === 2 ? hand2 : hand3;
+        const hand4th = t4 === 0 ? hand0 : t4 === 1 ? hand1 : t4 === 2 ? hand2 : hand3;
+
+        const redJokers3rd = hand3rd.filter(c => c.value === 'red_joker').length;
+        const redJokers4th = hand4th.filter(c => c.value === 'red_joker').length;
+
+        if (redJokers3rd + redJokers4th >= 2) {
+          isResisted = true;
+          resistedReason = language === 'zh'
+            ? `抗贡触发：输家队伍手中共有 ${redJokers3rd + redJokers4th} 张大王（双大王），本局免除进贡！`
+            : `Anti-tribute triggered: Losing team has ${redJokers3rd + redJokers4th} Red Jokers, tribute is waived!`;
+        }
+      } else {
+        const hand4th = t4 === 0 ? hand0 : t4 === 1 ? hand1 : t4 === 2 ? hand2 : hand3;
+        const redJokers4th = hand4th.filter(c => c.value === 'red_joker').length;
+
+        if (redJokers4th >= 2) {
+          isResisted = true;
+          resistedReason = language === 'zh'
+            ? `抗贡触发：末家（下游）手中持有 2 张大王，本局免除进贡！`
+            : `Anti-tribute triggered: Downstream player has 2 Red Jokers, tribute is waived!`;
+        }
+      }
+
+      if (isResisted) {
+        startingPlayerIndex = t1; // 1st finisher starts playing directly
+        setTribute({
+          isActive: true,
+          isResisted: true,
+          resistedReason,
+          items: [],
+          startingPlayerIndex
+        });
+      } else {
+        // Build tribute items
+        // Create mutable hand lists
+        let tempHands = [ [...hand0], [...hand1], [...hand2], [...hand3] ];
+
+        if (isDoubleDown) {
+          // Double Down: t4 pays to t1, t3 pays to t2
+          const hand3rd = tempHands[t3];
+          const hand4th = tempHands[t4];
+
+          const adjusted3rd = adjustRanksForLevel(hand3rd, nextLevel).sort((a, b) => b.rank - a.rank || b.suit.localeCompare(a.suit));
+          const adjusted4th = adjustRanksForLevel(hand4th, nextLevel).sort((a, b) => b.rank - a.rank || b.suit.localeCompare(a.suit));
+
+          // Exclude Hearts Level Card (Feng Ren Pei / Wild card)
+          const eligible3rd = adjusted3rd.filter(c => !(c.suit === 'hearts' && c.value === nextLevel));
+          const eligible4th = adjusted4th.filter(c => !(c.suit === 'hearts' && c.value === nextLevel));
+
+          const card3rd = eligible3rd[0];
+          const card4th = eligible4th[0];
+
+          tributeItems = [
+            {
+              giverSeat: t4,
+              receiverSeat: t1,
+              givenCard: card4th,
+              status: 'pending_tribute'
+            },
+            {
+              giverSeat: t3,
+              receiverSeat: t2,
+              givenCard: card3rd,
+              status: 'pending_tribute'
+            }
+          ];
+        } else {
+          // Single Down: t4 pays to t1
+          const hand4th = tempHands[t4];
+          const adjusted4th = adjustRanksForLevel(hand4th, nextLevel).sort((a, b) => b.rank - a.rank || b.suit.localeCompare(a.suit));
+          const eligible4th = adjusted4th.filter(c => !(c.suit === 'hearts' && c.value === nextLevel));
+          const card4th = eligible4th[0];
+
+          tributeItems = [
+            {
+              giverSeat: t4,
+              receiverSeat: t1,
+              givenCard: card4th,
+              status: 'pending_tribute'
+            }
+          ];
+        }
+
+        // Execute givers' tribute card transfers from givers' hands to receivers' hands
+        tributeItems.forEach(item => {
+          const giverHand = tempHands[item.giverSeat];
+          const receiverHand = tempHands[item.receiverSeat];
+
+          const idx = giverHand.findIndex(c => c.id === item.givenCard?.id);
+          if (idx !== -1) {
+            const [card] = giverHand.splice(idx, 1);
+            receiverHand.push(card);
+          }
+        });
+
+        // Execute bot receivers' return transfers back to givers' hands
+        tributeItems.forEach(item => {
+          if (item.receiverSeat !== 0) {
+            // Bot receiver auto-returns a small card
+            const receiverHand = tempHands[item.receiverSeat];
+            const returnedCard = selectBotReturnCard(receiverHand, nextLevel);
+            item.returnedCard = returnedCard;
+            item.status = 'completed';
+
+            const giverHand = tempHands[item.giverSeat];
+            const idx = receiverHand.findIndex(c => c.id === returnedCard.id);
+            if (idx !== -1) {
+              const [card] = receiverHand.splice(idx, 1);
+              giverHand.push(card);
+            }
+          } else {
+            // Human receiver: pending manual return
+            item.status = 'pending_return';
+          }
+        });
+
+        // Determine startingPlayerIndex: Giver of the larger tribute card starts the game
+        if (isDoubleDown) {
+          const card3rd = tributeItems[1].givenCard;
+          const card4th = tributeItems[0].givenCard;
+          if (card3rd && card4th) {
+            if (card3rd.rank > card4th.rank) {
+              startingPlayerIndex = t3;
+            } else if (card4th.rank > card3rd.rank) {
+              startingPlayerIndex = t4;
+            } else {
+              startingPlayerIndex = t4;
+            }
+          }
+        } else {
+          startingPlayerIndex = t4;
+        }
+
+        // Assign back to the hands
+        hand0 = tempHands[0];
+        hand1 = tempHands[1];
+        hand2 = tempHands[2];
+        hand3 = tempHands[3];
+
+        setTribute({
+          isActive: true,
+          isResisted: false,
+          items: tributeItems,
+          startingPlayerIndex
+        });
+      }
     } else {
+      // First round or fallback: no tribute
+      setTribute(null);
+      // Fallback first hearts 2
       const firstHearts2Idx = shuffled.findIndex(c => c.suit === 'hearts' && c.value === '2');
       if (firstHearts2Idx !== -1) {
         startingPlayerIndex = Math.floor(firstHearts2Idx / 27);
@@ -616,7 +820,7 @@ export default function PlayerPortal({
             finishOrder: undefined
           };
         }),
-        activePlayerIndex: startingPlayerIndex,
+        activePlayerIndex: (tributeItems.length > 0 && tributeItems.some(it => it.status !== 'completed') && !isResisted) ? -1 : startingPlayerIndex,
         lastPlay: null,
         history: []
       };
@@ -650,12 +854,121 @@ export default function PlayerPortal({
     });
   };
 
+  const isEligibleReturnCard = (card: Card, levelCard: string): boolean => {
+    return ['2', '3', '4', '5', '6', '7', '8', '9', '10'].includes(card.value) && 
+           card.value !== levelCard && 
+           card.suit !== 'jokers';
+  };
+
   // Card Selection toggle
   const toggleSelectCard = (cardId: string) => {
+    if (tribute && tribute.isActive) {
+      // Check if human needs to return a card
+      const humanReturnItem = tribute.items.find(it => it.receiverSeat === 0 && it.status === 'pending_return');
+      if (!humanReturnItem) return;
+
+      const card = game?.players[0].cards.find(c => c.id === cardId);
+      if (!card || !isEligibleReturnCard(card, game!.currentLevel)) {
+        return;
+      }
+
+      setSelectedCards(prev => {
+        const selected = prev[cardId];
+        return selected ? {} : { [cardId]: true };
+      });
+      return;
+    }
+
     setSelectedCards(prev => ({
       ...prev,
       [cardId]: !prev[cardId]
     }));
+  };
+
+  // Human player returns tribute card
+  const handleReturnTribute = () => {
+    if (!game || !tribute || !tribute.isActive) return;
+
+    const pendingItemIndex = tribute.items.findIndex(item => item.receiverSeat === 0 && item.status === 'pending_return');
+    if (pendingItemIndex === -1) return;
+
+    const item = tribute.items[pendingItemIndex];
+
+    const selectedIds = Object.keys(selectedCards).filter(id => selectedCards[id]);
+    if (selectedIds.length !== 1) return;
+
+    const selectedCardId = selectedIds[0];
+    const player0 = game.players[0];
+    const selectedCard = player0.cards.find(c => c.id === selectedCardId);
+    if (!selectedCard) return;
+
+    // Remove from human's hand, add to giver's hand
+    setGame(prev => {
+      if (!prev) return null;
+
+      const levelCard = prev.currentLevel;
+
+      const updatedPlayers = prev.players.map(p => {
+        if (p.seat === 0) {
+          return {
+            ...p,
+            cards: p.cards.filter(c => c.id !== selectedCardId)
+          };
+        }
+        if (p.seat === item.giverSeat) {
+          const newCards = [...p.cards, selectedCard];
+          return {
+            ...p,
+            cards: sortCards(newCards, 'rank', levelCard)
+          };
+        }
+        return p;
+      });
+
+      return {
+        ...prev,
+        players: updatedPlayers
+      };
+    });
+
+    // Update tribute item status
+    setTribute(prev => {
+      if (!prev) return null;
+      const updatedItems = prev.items.map((it, idx) => {
+        if (idx === pendingItemIndex) {
+          return {
+            ...it,
+            returnedCard: selectedCard,
+            status: 'completed' as const
+          };
+        }
+        return it;
+      });
+
+      return {
+        ...prev,
+        items: updatedItems
+      };
+    });
+
+    setSelectedCards({});
+  };
+
+  // Start match playing phase after tribute/anti-tribute ends
+  const handleStartAfterTribute = () => {
+    if (!game || !tribute) return;
+
+    setGame(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        activePlayerIndex: tribute.startingPlayerIndex,
+        lastPlay: null,
+        history: []
+      };
+    });
+
+    setTribute(null);
   };
 
   // Drag and Drop card reordering
@@ -1126,6 +1439,7 @@ export default function PlayerPortal({
 
     setLastWinnerSeat(winnerSeat);
     setLastFinisherSeat(finisherSeat);
+    setLastOrderedSeats(orderedPlayers);
 
     const nextLevelValue = getNextLevel(game.currentLevel, manualAdvance);
 
@@ -1299,7 +1613,25 @@ export default function PlayerPortal({
           setDragOverCardId(null);
         }}
         onClick={() => toggleSelectCard(card.id)}
-        className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
+        className={(() => {
+          let extra = '';
+          if (tribute && tribute.isActive) {
+            const humanReturnItem = tribute.items.find(it => it.receiverSeat === 0 && it.status === 'pending_return');
+            if (humanReturnItem) {
+              const eligible = isEligibleReturnCard(card, game?.currentLevel || '2');
+              if (eligible) {
+                extra = "ring-2 ring-amber-400 border-amber-400 shadow-amber-400/25";
+              } else {
+                extra = "opacity-25 grayscale pointer-events-none";
+              }
+            } else {
+              extra = "opacity-25 grayscale pointer-events-none";
+            }
+          } else {
+            extra = isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2';
+          }
+          return `w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${extra} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`;
+        })()}
         style={{ zIndex: globalIdx }}
         whileTap={{ scale: 0.95 }}
       >
@@ -2299,6 +2631,100 @@ export default function PlayerPortal({
                                 ? (language === 'zh' ? '下一轮发牌' : 'Next Round Deal')
                                 : (language === 'zh' ? `代【${game.players[lastFinisherSeat || 0].displayName}】发牌` : `Deal for 【${game.players[lastFinisherSeat || 0].displayName}】`)}
                             </button>
+                          </div>
+                        ) : tribute && tribute.isActive ? (
+                          <div className="flex flex-col items-center justify-center text-center w-[340px] px-5 py-5 bg-slate-950 border-2 border-amber-500/50 rounded-2xl shadow-2xl shadow-amber-500/5 space-y-3.5 relative overflow-hidden">
+                            <div className="absolute -right-8 -top-8 w-24 h-24 bg-amber-500/10 rounded-full blur-xl pointer-events-none"></div>
+                            
+                            <div className="flex items-center space-x-1.5 text-amber-400 font-black">
+                              <Trophy className="w-4 h-4 text-amber-400" />
+                              <span className="text-xs uppercase tracking-widest">{language === 'zh' ? '掼蛋·进贡阶段' : 'GUANDAN · TRIBUTE PHASE'}</span>
+                            </div>
+
+                            {tribute.isResisted ? (
+                              <div className="space-y-3 w-full">
+                                <div className="text-[11px] text-red-400 font-bold bg-red-500/10 p-2.5 rounded-xl border border-red-500/20">
+                                  🛡️ {tribute.resistedReason}
+                                </div>
+                                <p className="text-[10px] text-slate-400 leading-normal">
+                                  {language === 'zh' ? '输家满足抗贡条件，本局无需进贡，直接开打！' : 'Losers resisted tribute! Starting the round directly.'}
+                                </p>
+                                <button
+                                  onClick={handleStartAfterTribute}
+                                  className="w-full py-2 bg-gradient-to-r from-amber-400 to-yellow-400 hover:from-amber-300 hover:to-yellow-300 text-slate-950 font-black rounded-xl text-xs transition border border-yellow-300 shadow-md shadow-yellow-400/20"
+                                >
+                                  {language === 'zh' ? '开始本局游戏' : 'Start Playing'}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="space-y-3.5 w-full">
+                                <div className="space-y-2 text-left max-h-[140px] overflow-y-auto pr-1">
+                                  {tribute.items.map((item, idx) => {
+                                    const giverName = game.players[item.giverSeat].displayName;
+                                    const receiverName = game.players[item.receiverSeat].displayName;
+                                    const givenCardText = item.givenCard ? `${renderSuitIcon(item.givenCard.suit, item.givenCard.value)}${item.givenCard.value === 'red_joker' ? '大王' : item.givenCard.value === 'black_joker' ? '小王' : item.givenCard.value}` : '';
+                                    const returnedCardText = item.returnedCard ? `${renderSuitIcon(item.returnedCard.suit, item.returnedCard.value)}${item.returnedCard.value}` : '';
+
+                                    return (
+                                      <div key={idx} className="bg-slate-900/60 border border-slate-850 p-2 rounded-xl text-[10px] leading-relaxed space-y-1">
+                                        <div className="flex justify-between font-black text-slate-300">
+                                          <span>{giverName} ➔ {receiverName}</span>
+                                          <span className="text-amber-400">{language === 'zh' ? '进贡' : 'Tribute'}</span>
+                                        </div>
+                                        <div className="flex items-center justify-between text-[9px] text-slate-400 font-mono">
+                                          <span>{language === 'zh' ? `进献大牌: ` : `Gave card: `} <strong className="text-red-400 font-black">{givenCardText}</strong></span>
+                                          <span>
+                                            {item.status === 'pending_return' ? (
+                                              item.receiverSeat === 0 ? (
+                                                <span className="text-amber-400 animate-pulse font-black">● {language === 'zh' ? '等待你还贡' : 'Waiting for you to return'}</span>
+                                              ) : (
+                                                <span className="text-slate-500">● {language === 'zh' ? '等待还贡...' : 'Waiting to return...'}</span>
+                                              )
+                                            ) : (
+                                              <span>{language === 'zh' ? '已回赠: ' : 'Returned: '} <strong className="text-emerald-400 font-black">{returnedCardText}</strong></span>
+                                            )}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+
+                                {tribute.items.some(it => it.receiverSeat === 0 && it.status === 'pending_return') ? (
+                                  <div className="bg-amber-500/5 border border-amber-500/20 p-2.5 rounded-xl space-y-2">
+                                    <span className="text-[10px] font-black text-amber-400 block">
+                                      🎁 {language === 'zh' ? '还贡说明: 回赠一张 2~10 的小牌' : 'Return Tribute: select a card from 2 to 10'}
+                                    </span>
+                                    <p className="text-[9px] text-slate-400 leading-snug">
+                                      {language === 'zh' ? '请在下方手牌中选择一张有黄色光圈的低数值小牌（不能是级牌），然后点击下方按钮还贡！' : 'Please select an eligible card highlighted below and click return.'}
+                                    </p>
+                                    <button
+                                      onClick={handleReturnTribute}
+                                      disabled={!Object.keys(selectedCards).some(id => selectedCards[id])}
+                                      className="w-full py-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-30 disabled:hover:bg-amber-500 text-slate-950 font-black rounded-lg text-[10px] transition shadow-md shadow-amber-500/10"
+                                    >
+                                      {language === 'zh' ? '确认回赠选中卡牌' : 'Confirm & Return Tribute Card'}
+                                    </button>
+                                  </div>
+                                ) : tribute.items.every(it => it.status === 'completed') ? (
+                                  <div className="space-y-2">
+                                    <div className="text-[10px] text-emerald-400 font-black bg-emerald-500/10 py-1.5 px-3 rounded-xl border border-emerald-500/25">
+                                      ✨ {language === 'zh' ? '进还贡已经全部完毕！' : 'Tribute phase completed!'}
+                                    </div>
+                                    <button
+                                      onClick={handleStartAfterTribute}
+                                      className="w-full py-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black rounded-xl text-xs transition border border-emerald-400 shadow-md shadow-emerald-500/20"
+                                    >
+                                      {language === 'zh' ? '进还贡完成，开始对局 🚀' : 'Start Round 🚀'}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="text-[10px] text-slate-500 animate-pulse py-2">
+                                    {language === 'zh' ? '对家或对手正在操作中...' : 'Waiting for bots to respond...'}
+                                  </div>
+                                )}
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <div className="flex flex-col items-center justify-center text-center max-w-sm px-6 py-4 bg-slate-900/40 border border-slate-800/40 rounded-2xl backdrop-blur-sm shadow-xl">
