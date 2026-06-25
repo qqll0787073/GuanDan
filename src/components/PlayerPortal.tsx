@@ -1319,12 +1319,14 @@ export default function PlayerPortal({
 
   // Bot Turn Simulator Loop
   useEffect(() => {
-    if (!game || game.status !== 'playing' || game.activePlayerIndex === 0) return;
+    if (!game || game.status !== 'playing' || game.activePlayerIndex < 0 || game.activePlayerIndex >= 4 || game.activePlayerIndex === 0) return;
 
     // Trigger bot play after a realistic short delay
     const timer = setTimeout(() => {
       const activeSeat = game.activePlayerIndex;
+      if (activeSeat < 0 || activeSeat >= 4) return;
       const bot = game.players[activeSeat];
+      if (!bot) return;
 
       // If the bot has already finished, skip their turn instantly
       if (bot.hasFinished) {
@@ -1358,7 +1360,9 @@ export default function PlayerPortal({
     if (!game || game.status !== 'playing') return;
 
     const activeSeat = game.activePlayerIndex;
+    if (activeSeat < 0 || activeSeat >= 4) return;
     const activePlayer = game.players[activeSeat];
+    if (!activePlayer) return;
     
     if (activePlayer.hasFinished) {
       setGame(prev => {
