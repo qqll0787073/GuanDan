@@ -92,6 +92,8 @@ export default function PlayerPortal({
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dragOverCardId, setDragOverCardId] = useState<string | null>(null);
   const [cardRows, setCardRows] = useState<{ [cardId: string]: 1 | 2 }>({});
+  const [seatedPlayers, setSeatedPlayers] = useState<{ id: string; displayName: string; seat: 0 | 1 | 2 | 3; team: 'A' | 'B'; isBot: boolean }[]>([]);
+  const [autoWaitActive, setAutoWaitActive] = useState(false);
 
   // Interactive panels
   const [showHistory, setShowHistory] = useState(false);
@@ -174,27 +176,25 @@ export default function PlayerPortal({
     // Set Room Info and transition to room view
     setSelectedRoomId(roomId);
 
-    // Update global room lists to simulate a new player joining
+    // Initialize seated players list (User is South / Seat 0)
+    setSeatedPlayers([
+      { id: currentUser.id, displayName: currentUser.displayName, seat: 0, team: 'A', isBot: false }
+    ]);
+    setAutoWaitActive(false);
+
+    // Update global room lists to reflect player joining
     const updatedRooms = rooms.map(r => {
       if (r.id === roomId) {
-        const playersList = [...r.players, currentUser.id];
-        // Populate with bots if less than 4 to allow instant play
-        while (playersList.length < 4) {
-          playersList.push(`bot-id-${playersList.length}`);
-        }
         return {
           ...r,
-          currentPlayerCount: 4,
-          players: playersList,
-          status: 'Full' as const,
+          currentPlayerCount: 1,
+          players: [currentUser.id],
+          status: 'Waiting' as const,
         };
       }
       return r;
     });
     updateRooms(updatedRooms);
-
-    // Initialize the gameplay!
-    initGame(roomId);
   };
 
   // Leave Room
@@ -219,7 +219,7 @@ export default function PlayerPortal({
   };
 
   // Start / Init game
-  const initGame = (roomId: number) => {
+  const initGame = (roomId: number, customPlayers?: { id: string; displayName: string; seat: 0 | 1 | 2 | 3; team: 'A' | 'B'; isBot: boolean }[]) => {
     const levelCard = '2'; // Starting level card is always 2
     const allCards = generateDecks(levelCard);
     const shuffled = shuffleCards(allCards);
@@ -230,6 +230,15 @@ export default function PlayerPortal({
     const hand2 = shuffled.slice(54, 81);
     const hand3 = shuffled.slice(81, 108);
 
+    const defaultPlayers = [
+      { id: currentUser?.id || 'player-1', displayName: currentUser?.displayName || 'Player', seat: 0 as const, team: 'A' as const, isBot: false },
+      { id: 'bot-1', displayName: language === 'en' ? 'AlphaBot' : '智多星电脑', seat: 1 as const, team: 'B' as const, isBot: true },
+      { id: 'bot-2', displayName: language === 'en' ? 'OmegaBot (Partner)' : '大将军对家', seat: 2 as const, team: 'A' as const, isBot: true },
+      { id: 'bot-3', displayName: language === 'en' ? 'SigmaBot' : '无双刀电脑', seat: 3 as const, team: 'B' as const, isBot: true },
+    ];
+
+    const finalPlayersDef = customPlayers && customPlayers.length === 4 ? customPlayers : defaultPlayers;
+
     const initialGame: GameState = {
       id: `game-${Date.now()}`,
       roomId,
@@ -237,14 +246,19 @@ export default function PlayerPortal({
       scoringMode: 'auto',
       currentLevel: '2',
       levelCardValue: '2',
-      players: [
-        { id: currentUser?.id || 'player-1', displayName: currentUser?.displayName || 'Player', seat: 0, team: 'A', cards: sortCards(hand0, 'rank', levelCard), hasFinished: false },
-        { id: 'bot-1', displayName: language === 'en' ? 'AlphaBot' : '智多星电脑', seat: 1, team: 'B', cards: sortCards(hand1, 'rank', levelCard), hasFinished: false },
-        { id: 'bot-2', displayName: language === 'en' ? 'OmegaBot (Partner)' : '大将军对家', seat: 2, team: 'A', cards: sortCards(hand2, 'rank', levelCard), hasFinished: false },
-        { id: 'bot-3', displayName: language === 'en' ? 'SigmaBot' : '无双刀电脑', seat: 3, team: 'B', cards: sortCards(hand3, 'rank', levelCard), hasFinished: false },
-      ],
-      teamA: { name: teamAName, playerIds: [currentUser?.id || 'player-1', 'bot-2'] },
-      teamB: { name: teamBName, playerIds: ['bot-1', 'bot-3'] },
+      players: finalPlayersDef.map((p, idx) => {
+        const hand = idx === 0 ? hand0 : idx === 1 ? hand1 : idx === 2 ? hand2 : hand3;
+        return {
+          id: p.id,
+          displayName: p.displayName,
+          seat: p.seat,
+          team: p.team,
+          cards: sortCards(hand, 'rank', levelCard),
+          hasFinished: false
+        };
+      }),
+      teamA: { name: teamAName, playerIds: [finalPlayersDef[0].id, finalPlayersDef[2].id] },
+      teamB: { name: teamBName, playerIds: [finalPlayersDef[1].id, finalPlayersDef[3].id] },
       activePlayerIndex: 0, // South starts
       lastPlay: null,
       history: [],
@@ -257,6 +271,172 @@ export default function PlayerPortal({
     };
     setGame(initialGame);
     setSelectedCards({});
+  };
+
+  // Simulate online players joining the room lounge over time
+  useEffect(() => {
+    if (!autoWaitActive || !selectedRoomId || game) return;
+
+    const timer = setInterval(() => {
+      setSeatedPlayers(prev => {
+        if (prev.length >= 4) {
+          setAutoWaitActive(false);
+          return prev;
+        }
+
+        // Find the first empty seat
+        const occupiedSeats = new Set(prev.map(p => p.seat));
+        let nextSeat: 1 | 2 | 3 = 1;
+        for (const s of [2, 1, 3] as const) {
+          if (!occupiedSeats.has(s)) {
+            nextSeat = s;
+            break;
+          }
+        }
+
+        const candidateNamesZh = ['大将军对家', '无双刀电脑', '智多星电脑', '对攻大师', '牌坛老手', '清风徐来', '掼蛋至尊', '江南皮皮虾'];
+        const candidateNamesEn = ['AlphaBot', 'OmegaBot (Partner)', 'SigmaBot', 'PokerPro', 'GuandanKing', 'CardMaster'];
+        const names = language === 'zh' ? candidateNamesZh : candidateNamesEn;
+        
+        const existingNames = new Set(prev.map(p => p.displayName));
+        const availableName = names.find(n => !existingNames.has(n)) || `Player-${Math.floor(Math.random() * 1000)}`;
+
+        const newPlayer = {
+          id: `player-sim-${Date.now()}`,
+          displayName: availableName,
+          seat: nextSeat,
+          team: nextSeat === 2 ? ('A' as const) : ('B' as const),
+          isBot: false
+        };
+
+        return [...prev, newPlayer].sort((a, b) => a.seat - b.seat);
+      });
+    }, 2500);
+
+    return () => clearInterval(timer);
+  }, [autoWaitActive, selectedRoomId, game, language]);
+
+  // Synchronize seated players with global rooms list
+  useEffect(() => {
+    if (!selectedRoomId || game) return;
+    const targetRoom = rooms.find(r => r.id === selectedRoomId);
+    if (!targetRoom) return;
+
+    if (targetRoom.currentPlayerCount !== seatedPlayers.length) {
+      const updatedRooms = rooms.map(r => {
+        if (r.id === selectedRoomId) {
+          return {
+            ...r,
+            currentPlayerCount: seatedPlayers.length,
+            players: seatedPlayers.map(p => p.id),
+            status: seatedPlayers.length >= 4 ? ('Full' as const) : ('Waiting' as const)
+          };
+        }
+        return r;
+      });
+      updateRooms(updatedRooms);
+    }
+  }, [seatedPlayers, selectedRoomId, game, rooms, updateRooms]);
+
+  // Seating management actions
+  const handleSeatPlayer = (seat: 0 | 1 | 2 | 3, displayName: string, isBot: boolean) => {
+    setSeatedPlayers(prev => {
+      const filtered = prev.filter(p => p.seat !== seat);
+      const newPlayer = {
+        id: isBot ? `bot-${seat}-${Date.now()}` : `friend-${seat}-${Date.now()}`,
+        displayName: displayName || (isBot ? (language === 'zh' ? '电脑机器人' : 'Bot') : (language === 'zh' ? '好友玩家' : 'Friend')),
+        seat,
+        team: (seat === 0 || seat === 2) ? ('A' as const) : ('B' as const),
+        isBot
+      };
+      return [...filtered, newPlayer].sort((a, b) => a.seat - b.seat);
+    });
+  };
+
+  const handleKickPlayer = (seat: 0 | 1 | 2 | 3) => {
+    setSeatedPlayers(prev => prev.filter(p => p.seat !== seat));
+  };
+
+  const handleFillAllBots = () => {
+    setSeatedPlayers(prev => {
+      const occupiedSeats = new Set(prev.map(p => p.seat));
+      const next = [...prev];
+      
+      const botNames = {
+        1: language === 'zh' ? '智多星电脑' : 'AlphaBot',
+        2: language === 'zh' ? '大将军对家' : 'OmegaBot (Partner)',
+        3: language === 'zh' ? '无双刀电脑' : 'SigmaBot'
+      };
+
+      ([1, 2, 3] as const).forEach(seat => {
+        if (!occupiedSeats.has(seat)) {
+          next.push({
+            id: `bot-${seat}-${Date.now()}`,
+            displayName: botNames[seat],
+            seat,
+            team: seat === 2 ? ('A' as const) : ('B' as const),
+            isBot: true
+          });
+        }
+      });
+
+      return next.sort((a, b) => a.seat - b.seat);
+    });
+  };
+
+  // Find current trick's plays for each player
+  const currentTrickActions = React.useMemo(() => {
+    if (!game) return [];
+    const actions: PlayAction[] = [];
+    let passCount = 0;
+    for (let i = 0; i < game.history.length; i++) {
+      const act = game.history[i];
+      if (act.isPass) {
+        passCount++;
+      } else {
+        passCount = 0;
+      }
+      if (passCount >= 3) {
+        break;
+      }
+      actions.push(act);
+    }
+    return actions;
+  }, [game?.history]);
+
+  const getPlayerCurrentTrickPlay = (seatIndex: number) => {
+    if (!game) return null;
+    const player = game.players[seatIndex];
+    return currentTrickActions.find(act => act.playerId === player.id);
+  };
+
+  // Insert space between cards by adding a special spacer card
+  const handleAddSpacer = () => {
+    if (!game) return;
+    const spacerId = `spacer-${Date.now()}-${Math.random()}`;
+    const newSpacerCard: Card = {
+      id: spacerId,
+      suit: 'clubs',
+      value: 'spacer',
+      rank: -1,
+      isLevelCard: false,
+      isWild: false,
+      deck: 1
+    };
+    setCardRows(prev => ({
+      ...prev,
+      [spacerId]: 1
+    }));
+    setGame(prev => {
+      if (!prev) return null;
+      const updatedPlayers = prev.players.map((p, idx) => {
+        if (idx === 0) {
+          return { ...p, cards: [...p.cards, newSpacerCard] };
+        }
+        return p;
+      });
+      return { ...prev, players: updatedPlayers };
+    });
   };
 
   // Synchronize cardRows state when game player cards change
@@ -297,7 +477,7 @@ export default function PlayerPortal({
   // Re-deal cards
   const handleRedeal = () => {
     if (selectedRoomId) {
-      initGame(selectedRoomId);
+      initGame(selectedRoomId, seatedPlayers);
     }
   };
 
@@ -312,9 +492,10 @@ export default function PlayerPortal({
       if (!prev) return null;
       const updatedPlayers = prev.players.map(p => {
         if (p.seat === 0) {
+          const realCardsOnly = p.cards.filter(c => c.value !== 'spacer');
           return {
             ...p,
-            cards: sortCards(p.cards, strategy, levelCard)
+            cards: sortCards(realCardsOnly, strategy, levelCard)
           };
         }
         return p;
@@ -547,7 +728,7 @@ export default function PlayerPortal({
     if (!game || game.activePlayerIndex !== 0) return;
 
     const myHand = game.players[0].cards;
-    const playList = myHand.filter(c => selectedCards[c.id]);
+    const playList = myHand.filter(c => selectedCards[c.id] && c.value !== 'spacer');
 
     if (playList.length === 0) {
       alert(t('mustPlayValid'));
@@ -705,6 +886,45 @@ export default function PlayerPortal({
     return () => clearTimeout(timer);
   }, [game?.activePlayerIndex, game?.status]);
 
+  // Automatically skip finished players' turns & handle "接风" (Wind Catching) rule
+  useEffect(() => {
+    if (!game || game.status !== 'playing') return;
+
+    const activeSeat = game.activePlayerIndex;
+    const activePlayer = game.players[activeSeat];
+    
+    if (activePlayer.hasFinished) {
+      setGame(prev => {
+        if (!prev) return null;
+        
+        let nextSeat = (activeSeat + 1) % 4;
+        let nextLastPlay = prev.lastPlay;
+
+        // "接风" (Wind Catching) Rule:
+        // If a player has finished and the lead is returned to them (i.e., lastPlay was theirs and everyone else passed,
+        // which means lastPlay.playerId === activePlayer.id), then their partner gets the lead!
+        if (prev.lastPlay && prev.lastPlay.playerId === activePlayer.id) {
+          // Clear lastPlay (ends the trick)
+          nextLastPlay = null;
+          // Partner of active player leads!
+          const partnerSeat = (activeSeat + 2) % 4;
+          nextSeat = partnerSeat;
+        } else {
+          // Otherwise, normal skip. If the next seat is the owner of lastPlay, clear trick.
+          if (nextLastPlay && nextLastPlay.playerId === prev.players[nextSeat].id) {
+            nextLastPlay = null;
+          }
+        }
+
+        return {
+          ...prev,
+          activePlayerIndex: nextSeat,
+          lastPlay: nextLastPlay
+        };
+      });
+    }
+  }, [game?.activePlayerIndex, game?.status, game?.lastPlay]);
+
   // Handle automatic scoring on game end
   useEffect(() => {
     if (game && game.status === 'ended' && game.scoringMode === 'auto' && !showScoringModal) {
@@ -784,6 +1004,145 @@ export default function PlayerPortal({
     if (suit === 'clubs') return '♣️';
     if (val === 'red_joker') return '🃏🟥';
     return '🃏⬛';
+  };
+
+  const renderPlayerHandCard = (card: Card, cards: Card[], globalIdx: number) => {
+    const isSel = !!selectedCards[card.id];
+    const isDragged = draggedCardId === card.id;
+    const isDragOver = dragOverCardId === card.id;
+
+    if (card.value === 'spacer') {
+      return (
+        <motion.div
+          key={card.id}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData('text/plain', card.id);
+            setDraggedCardId(card.id);
+          }}
+          onDragEnd={() => {
+            setDraggedCardId(null);
+            setDragOverCardId(null);
+          }}
+          onDragOver={(e) => {
+            e.preventDefault();
+            if (dragOverCardId !== card.id) {
+              setDragOverCardId(card.id);
+            }
+          }}
+          onDragLeave={() => {
+            if (dragOverCardId === card.id) {
+              setDragOverCardId(null);
+            }
+          }}
+          onDrop={(e) => {
+            e.preventDefault();
+            const draggedId = e.dataTransfer.getData('text/plain');
+            if (draggedId) {
+              handleCardDrop(draggedId, card.id);
+            }
+            setDragOverCardId(null);
+          }}
+          className={`w-12 h-18 sm:w-14 sm:h-22 bg-slate-900/60 rounded-xl border-2 border-dashed border-slate-700/60 flex flex-col items-center justify-between p-1 cursor-pointer relative group transition-all duration-200 ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
+          style={{ zIndex: globalIdx }}
+          whileTap={{ scale: 0.95 }}
+        >
+          <div className="w-full flex justify-end">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setGame(prev => {
+                  if (!prev) return null;
+                  const updatedPlayers = prev.players.map((p, idx) => {
+                    if (idx === 0) {
+                      return { ...p, cards: p.cards.filter(c => c.id !== card.id) };
+                    }
+                    return p;
+                  });
+                  return { ...prev, players: updatedPlayers };
+                });
+              }}
+              className="text-slate-400 hover:text-red-400 p-0.5 rounded transition absolute top-0.5 right-0.5 z-10"
+              title={language === 'zh' ? '删除空格' : 'Remove gap'}
+            >
+              <span className="text-[10px] font-bold">✕</span>
+            </button>
+          </div>
+          <div className="text-center text-[10px] sm:text-xs text-slate-500 font-mono select-none font-bold">
+            {language === 'zh' ? '空格' : 'GAP'}
+          </div>
+          <div></div>
+        </motion.div>
+      );
+    }
+
+    return (
+      <motion.div
+        key={card.id}
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData('text/plain', card.id);
+          setDraggedCardId(card.id);
+        }}
+        onDragEnd={() => {
+          setDraggedCardId(null);
+          setDragOverCardId(null);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (dragOverCardId !== card.id) {
+            setDragOverCardId(card.id);
+          }
+        }}
+        onDragLeave={() => {
+          if (dragOverCardId === card.id) {
+            setDragOverCardId(null);
+          }
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          const draggedId = e.dataTransfer.getData('text/plain');
+          if (draggedId) {
+            handleCardDrop(draggedId, card.id);
+          }
+          setDragOverCardId(null);
+        }}
+        onClick={() => toggleSelectCard(card.id)}
+        className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
+        style={{ zIndex: globalIdx }}
+        whileTap={{ scale: 0.95 }}
+      >
+        {/* Top rank value and suit */}
+        <div className="flex flex-col items-start leading-none">
+          <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
+            {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
+          </span>
+          <span className="text-[9px] sm:text-[10px] mt-0.5">
+            {card.suit !== 'jokers' && renderSuitIcon(card.suit, card.value)}
+          </span>
+        </div>
+
+        {/* Center decorative suit / status icon */}
+        <div className="text-center">
+          {card.isWild ? (
+            <span className="text-[8px] bg-red-100 text-red-600 px-1 py-0.5 rounded-full font-bold uppercase leading-none">WILD</span>
+          ) : card.isLevelCard ? (
+            <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-bold uppercase leading-none font-sans">LEVEL</span>
+          ) : (
+            <span className="text-[14px] sm:text-[16px] opacity-70">
+              {renderSuitIcon(card.suit, card.value)}
+            </span>
+          )}
+        </div>
+
+        {/* Bottom reversed rank */}
+        <div className="flex items-end justify-end leading-none rotate-180">
+          <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
+            {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
+          </span>
+        </div>
+      </motion.div>
+    );
   };
 
   return (
@@ -1209,24 +1568,28 @@ export default function PlayerPortal({
 
                         {/* Top Seat last played display */}
                         <div className="h-16 mt-3 flex items-center justify-center">
-                          {game.history[0]?.playerId === 'bot-2' && (
-                            <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                              {game.history[0].isPass ? (
-                                <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                              ) : (
-                                <div className="flex flex-col items-center">
-                                  <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{game.history[0].cardType}</span>
-                                  <div className="flex space-x-1 mt-1">
-                                    {game.history[0].cards.map((c, i) => (
-                                      <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                        {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                      </span>
-                                    ))}
+                          {(() => {
+                            const act = getPlayerCurrentTrickPlay(2);
+                            if (!act) return null;
+                            return (
+                              <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
+                                {act.isPass ? (
+                                  <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
+                                ) : (
+                                  <div className="flex flex-col items-center">
+                                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
+                                    <div className="flex space-x-1 mt-1">
+                                      {act.cards.map((c, i) => (
+                                        <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
+                                          {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
+                                        </span>
+                                      ))}
+                                    </div>
                                   </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
                       </div>
 
@@ -1253,24 +1616,28 @@ export default function PlayerPortal({
 
                           {/* West Seat last played display */}
                           <div className="h-16 mt-3 flex items-center justify-center">
-                            {game.history[0]?.playerId === 'bot-3' && (
-                              <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                                {game.history[0].isPass ? (
-                                  <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                                ) : (
-                                  <div className="flex flex-col items-center">
-                                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{game.history[0].cardType}</span>
-                                    <div className="flex space-x-1 mt-1">
-                                      {game.history[0].cards.map((c, i) => (
-                                        <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                          {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                        </span>
-                                      ))}
+                            {(() => {
+                              const act = getPlayerCurrentTrickPlay(3);
+                              if (!act) return null;
+                              return (
+                                <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
+                                  {act.isPass ? (
+                                    <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
+                                  ) : (
+                                    <div className="flex flex-col items-center">
+                                      <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
+                                      <div className="flex space-x-1 mt-1">
+                                        {act.cards.map((c, i) => (
+                                          <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
+                                            {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
+                                          </span>
+                                        ))}
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
 
@@ -1334,24 +1701,28 @@ export default function PlayerPortal({
 
                           {/* East Seat last played display */}
                           <div className="h-16 mt-3 flex items-center justify-center">
-                            {game.history[0]?.playerId === 'bot-1' && (
-                              <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                                {game.history[0].isPass ? (
-                                  <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                                ) : (
-                                  <div className="flex flex-col items-center">
-                                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{game.history[0].cardType}</span>
-                                    <div className="flex space-x-1 mt-1">
-                                      {game.history[0].cards.map((c, i) => (
-                                        <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                          {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                        </span>
-                                      ))}
+                            {(() => {
+                              const act = getPlayerCurrentTrickPlay(1);
+                              if (!act) return null;
+                              return (
+                                <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
+                                  {act.isPass ? (
+                                    <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
+                                  ) : (
+                                    <div className="flex flex-col items-center">
+                                      <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
+                                      <div className="flex space-x-1 mt-1">
+                                        {act.cards.map((c, i) => (
+                                          <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
+                                            {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
+                                          </span>
+                                        ))}
+                                      </div>
                                     </div>
-                                  </div>
-                                )}
-                              </div>
-                            )}
+                                  )}
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
 
@@ -1361,24 +1732,28 @@ export default function PlayerPortal({
                       <div className="flex flex-col items-center">
                         {/* Human last played display */}
                         <div className="h-16 mb-2 flex items-center justify-center">
-                          {game.history[0]?.playerId === (currentUser?.id || 'player-1') && (
-                            <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                              {game.history[0].isPass ? (
-                                <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                              ) : (
-                                <div className="flex flex-col items-center">
-                                  <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{game.history[0].cardType}</span>
-                                  <div className="flex space-x-1 mt-1">
-                                    {game.history[0].cards.map((c, i) => (
-                                      <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                        {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                      </span>
-                                    ))}
+                          {(() => {
+                            const act = getPlayerCurrentTrickPlay(0);
+                            if (!act) return null;
+                            return (
+                              <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
+                                {act.isPass ? (
+                                  <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
+                                ) : (
+                                  <div className="flex flex-col items-center">
+                                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
+                                    <div className="flex space-x-1 mt-1">
+                                      {act.cards.map((c, i) => (
+                                        <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
+                                          {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
+                                        </span>
+                                      ))}
+                                    </div>
                                   </div>
-                                </div>
-                              )}
-                            </div>
-                          )}
+                                )}
+                              </div>
+                            );
+                          })()}
                         </div>
 
                         {/* Player Seat status and cards controls */}
@@ -1417,6 +1792,16 @@ export default function PlayerPortal({
                               title={t('sortByCombo')}
                             >
                               <RefreshCw className="w-4 h-4" />
+                            </button>
+
+                            <div className="w-px h-6 bg-slate-800"></div>
+
+                            <button
+                              onClick={handleAddSpacer}
+                              className="px-3 py-2 rounded-lg border border-emerald-900/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/25 text-xs font-bold transition flex items-center space-x-1"
+                              title={language === 'zh' ? '插入空格' : 'Insert Gap'}
+                            >
+                              <span>+ {language === 'zh' ? '空格' : 'GAP'}</span>
                             </button>
 
                             <div className="w-px h-6 bg-slate-800"></div>
@@ -1479,7 +1864,7 @@ export default function PlayerPortal({
                       {/* ACTIVE HAND DISPLAY AREA */}
                       <div className="mt-6 flex flex-col items-center w-full">
                         <span className="text-[10px] font-bold text-slate-500 font-mono tracking-widest uppercase mb-3 text-center px-4">
-                          {t('yourHand')} ({game.players[0].cards.length} / 27) {language === 'zh' ? '· 每行最多20张 · 允许任意拖拽排序或使用平移按钮' : '· Max 20/row · Drag cards to reorder or use shift buttons'}
+                          {t('yourHand')} ({game.players[0].cards.length} / 27) {language === 'zh' ? '· 每行允许任意数量的牌 · 允许任意拖拽排序或使用平移按钮' : '· Any number of cards per row · Drag cards to reorder or use shift buttons'}
                         </span>
 
                         <div className="w-full overflow-x-auto pb-4 px-4 flex flex-col items-center space-y-4">
@@ -1503,81 +1888,11 @@ export default function PlayerPortal({
                                   className="flex -space-x-4 sm:-space-x-5 min-w-max py-2 px-6 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800/60 min-h-[110px] sm:min-h-[130px] items-center justify-center transition-colors hover:bg-slate-900/60"
                                 >
                                   {row1Cards.length === 0 ? (
-                                    <span className="text-xs text-slate-600 font-mono italic px-8">{language === 'zh' ? '拖拽卡牌至此行 (最多20张)' : 'Drag cards here (Max 20)'}</span>
+                                    <span className="text-xs text-slate-600 font-mono italic px-8">{language === 'zh' ? '拖拽卡牌至此行 (允许任意数量)' : 'Drag cards here (Any number)'}</span>
                                   ) : (
                                     row1Cards.map((card) => {
                                       const globalIdx = cards.findIndex(c => c.id === card.id);
-                                      const isSel = !!selectedCards[card.id];
-                                      const isDragged = draggedCardId === card.id;
-                                      const isDragOver = dragOverCardId === card.id;
-
-                                      return (
-                                        <motion.div
-                                          key={card.id}
-                                          draggable
-                                          onDragStart={(e) => {
-                                            e.dataTransfer.setData('text/plain', card.id);
-                                            setDraggedCardId(card.id);
-                                          }}
-                                          onDragEnd={() => {
-                                            setDraggedCardId(null);
-                                            setDragOverCardId(null);
-                                          }}
-                                          onDragOver={(e) => {
-                                            e.preventDefault();
-                                            if (dragOverCardId !== card.id) {
-                                              setDragOverCardId(card.id);
-                                            }
-                                          }}
-                                          onDragLeave={() => {
-                                            if (dragOverCardId === card.id) {
-                                              setDragOverCardId(null);
-                                            }
-                                          }}
-                                          onDrop={(e) => {
-                                            e.preventDefault();
-                                            const draggedId = e.dataTransfer.getData('text/plain');
-                                            if (draggedId) {
-                                              handleCardDrop(draggedId, card.id);
-                                            }
-                                            setDragOverCardId(null);
-                                          }}
-                                          onClick={() => toggleSelectCard(card.id)}
-                                          className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
-                                          style={{ zIndex: globalIdx }}
-                                          whileTap={{ scale: 0.95 }}
-                                        >
-                                          {/* Top rank value and suit */}
-                                          <div className="flex flex-col items-start leading-none">
-                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
-                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
-                                            </span>
-                                            <span className="text-[9px] sm:text-[10px] mt-0.5">
-                                              {card.suit !== 'jokers' && renderSuitIcon(card.suit, card.value)}
-                                            </span>
-                                          </div>
-
-                                          {/* Center decorative suit / status icon */}
-                                          <div className="text-center">
-                                            {card.isWild ? (
-                                              <span className="text-[8px] bg-red-100 text-red-600 px-1 py-0.5 rounded-full font-bold uppercase leading-none">WILD</span>
-                                            ) : card.isLevelCard ? (
-                                              <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-bold uppercase leading-none">LEVEL</span>
-                                            ) : (
-                                              <span className="text-[14px] sm:text-[16px] opacity-70">
-                                                {renderSuitIcon(card.suit, card.value)}
-                                              </span>
-                                            )}
-                                          </div>
-
-                                          {/* Bottom reversed rank */}
-                                          <div className="flex items-end justify-end leading-none rotate-180">
-                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
-                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
-                                            </span>
-                                          </div>
-                                        </motion.div>
-                                      );
+                                      return renderPlayerHandCard(card, cards, globalIdx);
                                     })
                                   )}
                                 </div>
@@ -1595,81 +1910,11 @@ export default function PlayerPortal({
                                   className="flex -space-x-4 sm:-space-x-5 min-w-max py-2 px-6 rounded-2xl bg-slate-900/40 border border-dashed border-slate-800/60 min-h-[110px] sm:min-h-[130px] items-center justify-center transition-colors hover:bg-slate-900/60"
                                 >
                                   {row2Cards.length === 0 ? (
-                                    <span className="text-xs text-slate-600 font-mono italic px-8">{language === 'zh' ? '拖拽卡牌至此行 (最多20张)' : 'Drag cards here (Max 20)'}</span>
+                                    <span className="text-xs text-slate-600 font-mono italic px-8">{language === 'zh' ? '拖拽卡牌至此行 (允许任意数量)' : 'Drag cards here (Any number)'}</span>
                                   ) : (
                                     row2Cards.map((card) => {
                                       const globalIdx = cards.findIndex(c => c.id === card.id);
-                                      const isSel = !!selectedCards[card.id];
-                                      const isDragged = draggedCardId === card.id;
-                                      const isDragOver = dragOverCardId === card.id;
-
-                                      return (
-                                        <motion.div
-                                          key={card.id}
-                                          draggable
-                                          onDragStart={(e) => {
-                                            e.dataTransfer.setData('text/plain', card.id);
-                                            setDraggedCardId(card.id);
-                                          }}
-                                          onDragEnd={() => {
-                                            setDraggedCardId(null);
-                                            setDragOverCardId(null);
-                                          }}
-                                          onDragOver={(e) => {
-                                            e.preventDefault();
-                                            if (dragOverCardId !== card.id) {
-                                              setDragOverCardId(card.id);
-                                            }
-                                          }}
-                                          onDragLeave={() => {
-                                            if (dragOverCardId === card.id) {
-                                              setDragOverCardId(null);
-                                            }
-                                          }}
-                                          onDrop={(e) => {
-                                            e.preventDefault();
-                                            const draggedId = e.dataTransfer.getData('text/plain');
-                                            if (draggedId) {
-                                              handleCardDrop(draggedId, card.id);
-                                            }
-                                            setDragOverCardId(null);
-                                          }}
-                                          onClick={() => toggleSelectCard(card.id)}
-                                          className={`w-12 h-18 sm:w-14 sm:h-22 bg-white rounded-xl border border-slate-200 shadow-md flex flex-col justify-between p-1.5 cursor-pointer select-none transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20' : 'hover:-translate-y-2'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
-                                          style={{ zIndex: globalIdx }}
-                                          whileTap={{ scale: 0.95 }}
-                                        >
-                                          {/* Top rank value and suit */}
-                                          <div className="flex flex-col items-start leading-none">
-                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
-                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
-                                            </span>
-                                            <span className="text-[9px] sm:text-[10px] mt-0.5">
-                                              {card.suit !== 'jokers' && renderSuitIcon(card.suit, card.value)}
-                                            </span>
-                                          </div>
-
-                                          {/* Center decorative suit / status icon */}
-                                          <div className="text-center">
-                                            {card.isWild ? (
-                                              <span className="text-[8px] bg-red-100 text-red-600 px-1 py-0.5 rounded-full font-bold uppercase leading-none">WILD</span>
-                                            ) : card.isLevelCard ? (
-                                              <span className="text-[8px] bg-amber-100 text-amber-700 px-1 py-0.5 rounded-full font-bold uppercase leading-none">LEVEL</span>
-                                            ) : (
-                                              <span className="text-[14px] sm:text-[16px] opacity-70">
-                                                {renderSuitIcon(card.suit, card.value)}
-                                              </span>
-                                            )}
-                                          </div>
-
-                                          {/* Bottom reversed rank */}
-                                          <div className="flex items-end justify-end leading-none rotate-180">
-                                            <span className={`text-[11px] sm:text-xs font-black ${getSuitColor(card.suit)}`}>
-                                              {card.value === 'red_joker' ? 'RJ' : card.value === 'black_joker' ? 'BJ' : card.value}
-                                            </span>
-                                          </div>
-                                        </motion.div>
-                                      );
+                                      return renderPlayerHandCard(card, cards, globalIdx);
                                     })
                                   )}
                                 </div>
