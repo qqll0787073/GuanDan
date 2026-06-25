@@ -37,6 +37,32 @@ export default function AdminPortal({
 
   const [activeTab, setActiveTab] = useState<'approvals' | 'players' | 'rooms' | 'records'>('approvals');
   const [searchQuery, setSearchQuery] = useState('');
+  const [contextMenu, setContextMenu] = useState<{
+    visible: boolean;
+    x: number;
+    y: number;
+    roomId: number | null;
+  }>({
+    visible: false,
+    x: 0,
+    y: 0,
+    roomId: null,
+  });
+
+  const handleResetRoom = (roomId: number) => {
+    const updatedRooms = rooms.map(r => {
+      if (r.id === roomId) {
+        return {
+          ...r,
+          currentPlayerCount: 0,
+          players: [],
+          status: 'Waiting' as const,
+        };
+      }
+      return r;
+    });
+    roomsStatusUpdate(updatedRooms);
+  };
 
   const t = (key: string) => getTranslation(key, language);
 
@@ -395,7 +421,12 @@ export default function AdminPortal({
             {/* TAB CONTENT: 3. ROOM LOBBY MONITOR */}
             {activeTab === 'rooms' && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
-                <h3 className="text-base font-bold text-slate-200">{t('roomList')}</h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <h3 className="text-base font-bold text-slate-200">{t('roomList')}</h3>
+                  <span className="text-xs text-slate-400">
+                    {language === 'zh' ? '💡 提示: 右键点击任意房间可以 "reset to 空闲"' : '💡 Tip: Right-click any room to "reset to 空闲"'}
+                  </span>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
                   {rooms.map((r) => {
@@ -406,7 +437,16 @@ export default function AdminPortal({
                     return (
                       <div 
                         key={r.id} 
-                        className="bg-slate-950 border border-slate-850 p-4.5 rounded-xl hover:border-slate-800 transition space-y-3"
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          setContextMenu({
+                            visible: true,
+                            x: e.clientX,
+                            y: e.clientY,
+                            roomId: r.id
+                          });
+                        }}
+                        className="bg-slate-950 border border-slate-850 p-4.5 rounded-xl hover:border-slate-800 transition space-y-3 cursor-context-menu select-none relative"
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-[10px] font-mono text-slate-600">ID #{r.id.toString().padStart(2, '0')}</span>
@@ -485,6 +525,40 @@ export default function AdminPortal({
 
           </main>
         </div>
+      )}
+
+      {/* Floating Right-Click Context Menu for Room Reset */}
+      {contextMenu.visible && (
+        <>
+          <div 
+            className="fixed inset-0 z-50 cursor-default bg-transparent"
+            onClick={() => setContextMenu({ visible: false, x: 0, y: 0, roomId: null })}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu({ visible: false, x: 0, y: 0, roomId: null });
+            }}
+          />
+          <div 
+            className="fixed bg-slate-900 border border-slate-800 rounded-xl py-1 w-48 shadow-2xl z-50 text-left overflow-hidden border-red-500/20"
+            style={{ 
+              top: `${contextMenu.y}px`, 
+              left: `${contextMenu.x}px` 
+            }}
+          >
+            <button
+              onClick={() => {
+                if (contextMenu.roomId !== null) {
+                  handleResetRoom(contextMenu.roomId);
+                }
+                setContextMenu({ visible: false, x: 0, y: 0, roomId: null });
+              }}
+              className="w-full text-left px-4 py-2.5 text-xs font-bold text-red-400 hover:bg-red-500/10 flex items-center space-x-2 transition"
+            >
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+              <span>{language === 'zh' ? 'reset to 空闲' : 'reset to 空闲'}</span>
+            </button>
+          </div>
+        </>
       )}
 
     </div>

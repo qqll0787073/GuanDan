@@ -366,6 +366,21 @@ export default function PlayerPortal({
     }
   }, [seatedPlayers, selectedRoomId, game, rooms, updateRooms]);
 
+  // If the room gets reset by an admin, redirect back to lobby
+  useEffect(() => {
+    if (!selectedRoomId) return;
+    const targetRoom = rooms.find(r => r.id === selectedRoomId);
+    if (targetRoom && targetRoom.currentPlayerCount === 0 && targetRoom.players.length === 0) {
+      if (game || (seatedPlayers.length > 1) || loungeMode === 'wait') {
+        setSelectedRoomId(null);
+        setLoungeMode(null);
+        setGame(null);
+        setSelectedCards({});
+        setShowHistory(false);
+      }
+    }
+  }, [rooms, selectedRoomId, game, seatedPlayers, loungeMode]);
+
   // Seating management actions
   const handleSeatPlayer = (seat: 0 | 1 | 2 | 3, displayName: string, isBot: boolean) => {
     setSeatedPlayers(prev => {
@@ -808,11 +823,19 @@ export default function PlayerPortal({
       const nextSeatIndex = (seatIndex + 1) % 4;
 
       // Filter hand
-      const nextCards = player.cards.filter(c => !cardsPlayed.some(cp => cp.id === c.id));
+      let nextCards = player.cards.filter(c => !cardsPlayed.some(cp => cp.id === c.id));
+      const hasRealCardsLeft = nextCards.some(c => c.value !== 'spacer');
+      if (!hasRealCardsLeft) {
+        nextCards = []; // if only spacers are left, clear them to treat it as empty
+      }
       const hasFinishedNow = nextCards.length === 0 && !player.hasFinished;
 
       // Track finish order
-      const currentFinishersCount = prev.players.filter(p => p.hasFinished || (p.seat === seatIndex && nextCards.length === 0)).length;
+      const currentFinishersCount = prev.players.filter(p => {
+        if (p.hasFinished) return true;
+        if (p.seat === seatIndex) return nextCards.length === 0;
+        return p.cards.filter(c => c.value !== 'spacer').length === 0;
+      }).length;
       const finishOrder = hasFinishedNow ? currentFinishersCount : player.finishOrder;
 
       // Create log
