@@ -1234,7 +1234,6 @@ export default function PlayerPortal({
       if (!prev) return null;
 
       const player = prev.players[seatIndex];
-      const nextSeatIndex = (seatIndex + 1) % 4;
 
       // Filter hand
       let nextCards = player.cards.filter(c => !cardsPlayed.some(cp => cp.id === c.id));
@@ -1250,7 +1249,6 @@ export default function PlayerPortal({
         if (p.seat === seatIndex) return nextCards.length === 0;
         return p.cards.filter(c => c.value !== 'spacer').length === 0;
       }).length;
-      const finishOrder = hasFinishedNow ? currentFinishersCount : player.finishOrder;
 
       // Create log
       const playAction: PlayAction = {
@@ -1266,18 +1264,6 @@ export default function PlayerPortal({
 
       // Update history and last play
       const updatedHistory = [playAction, ...prev.history];
-      
-      // Determine new lead. If all other active players pass, the lead clears.
-      // In Guandan, if there is a play, then 3 consecutive passes, the trick is completed and the last player who played leads next.
-      let nextLastPlay = prev.lastPlay;
-      if (!isPass) {
-        nextLastPlay = playAction;
-      }
-
-      // Check if trick completed (3 consecutive passes since last real play)
-      // For this simplified logic, if the next active player was the one who played lastPlay, clear lastPlay
-      const isNextPlayerOwnerOfLastPlay = nextLastPlay && nextLastPlay.playerId === prev.players[nextSeatIndex].id;
-      const clearedLastPlay = isNextPlayerOwnerOfLastPlay ? null : nextLastPlay;
 
       // Update player hand & stats
       const updatedPlayers = prev.players.map(p => {
@@ -1294,18 +1280,77 @@ export default function PlayerPortal({
 
       // Check if Game Completed (All players on a team have finished, or only one player remains with cards)
       const finishedPlayers = updatedPlayers.filter(p => p.hasFinished);
-      const gameFinished = finishedPlayers.length >= 3;
+      const isTeamAFinished = (updatedPlayers.find(p => p.seat === 0)?.hasFinished) && (updatedPlayers.find(p => p.seat === 2)?.hasFinished);
+      const isTeamBFinished = (updatedPlayers.find(p => p.seat === 1)?.hasFinished) && (updatedPlayers.find(p => p.seat === 3)?.hasFinished);
+      const gameFinished = finishedPlayers.length >= 3 || isTeamAFinished || isTeamBFinished;
 
       let gameStatus = prev.status;
       if (gameFinished) {
         gameStatus = 'ended';
       }
 
+      // Determine next active player and handle trick clearing & "接风" (Jiefeng) rule
+      let nextSeatIndex = (seatIndex + 1) % 4;
+      let nextLastPlay = prev.lastPlay;
+      if (!isPass) {
+        nextLastPlay = playAction;
+      }
+
+      if (!gameFinished) {
+        let foundNextPlayer = false;
+        let safetyCounter = 0;
+
+        while (!foundNextPlayer && safetyCounter < 10) {
+          safetyCounter++;
+
+          if (nextLastPlay) {
+            const ownerPlayer = updatedPlayers.find(p => p.id === nextLastPlay?.playerId);
+            const ownerSeat = ownerPlayer ? ownerPlayer.seat : -1;
+
+            if (nextSeatIndex === ownerSeat) {
+              // Trick completed! Everyone else passed.
+              nextLastPlay = null; // Clear active trick
+
+              if (ownerPlayer && !ownerPlayer.hasFinished) {
+                foundNextPlayer = true;
+              } else {
+                // Owner finished -> "接风" (Jiefeng)! Owner's partner leads
+                const partnerSeat = (ownerSeat + 2) % 4;
+                const partnerPlayer = updatedPlayers[partnerSeat];
+
+                if (!partnerPlayer.hasFinished) {
+                  nextSeatIndex = partnerSeat;
+                  foundNextPlayer = true;
+                } else {
+                  // Partner also finished, find next active player
+                  let checkSeat = (partnerSeat + 1) % 4;
+                  while (updatedPlayers[checkSeat].hasFinished && checkSeat !== partnerSeat) {
+                    checkSeat = (checkSeat + 1) % 4;
+                  }
+                  nextSeatIndex = checkSeat;
+                  foundNextPlayer = true;
+                }
+              }
+              break;
+            }
+          }
+
+          if (updatedPlayers[nextSeatIndex].hasFinished) {
+            nextSeatIndex = (nextSeatIndex + 1) % 4;
+          } else {
+            foundNextPlayer = true;
+          }
+        }
+      } else {
+        // Fallback or end of game
+        nextSeatIndex = (seatIndex + 1) % 4;
+      }
+
       return {
         ...prev,
         players: updatedPlayers,
         activePlayerIndex: nextSeatIndex,
-        lastPlay: clearedLastPlay,
+        lastPlay: nextLastPlay,
         history: updatedHistory,
         status: gameStatus,
       };
@@ -1475,21 +1520,32 @@ export default function PlayerPortal({
       const prevA = prev.scores?.teamALevel || '2';
       const prevB = prev.scores?.teamBLevel || '2';
 
-      const nextLevelA = manualWinner === 'A' ? advanceScoreboardLevel(prevA, manualAdvance) : prevA;
-      const nextLevelB = manualWinner === 'B' ? advanceScoreboardLevel(prevB, manualAdvance) : prevB;
+      let nextLevelA = manualWinner === 'A' ? advanceScoreboardLevel(prevA, manualAdvance) : prevA;
+      let nextLevelB = manualWinner === 'B' ? advanceScoreboardLevel(prevB, manualAdvance) : prevB;
+
+      let teamAScoreAdd = 0;
+      let teamBScoreAdd = 0;
+
+      if (nextLevelA === '🏆') {
+        teamAScoreAdd = 1;
+        nextLevelA = '2';
+        nextLevelB = '2';
+      } else if (nextLevelB === '🏆') {
+        teamBScoreAdd = 1;
+        nextLevelA = '2';
+        nextLevelB = '2';
+      }
 
       // Map level value for the active deck generator (e.g. if A1, A2, A3, level card is 'A')
-      const activeLevelValue = manualWinner === 'A' 
-        ? (nextLevelA === '🏆' ? 'A' : nextLevelA.startsWith('A') ? 'A' : nextLevelA) 
-        : (nextLevelB === '🏆' ? 'A' : nextLevelB.startsWith('A') ? 'A' : nextLevelB);
+      const activeLevelValue = nextLevelA.startsWith('A') ? 'A' : nextLevelA;
 
       return {
         ...prev,
         currentLevel: activeLevelValue,
         status: 'lobby',
         scores: {
-          teamAScore: manualWinner === 'A' ? (prev.scores?.teamAScore || 0) + 1 : (prev.scores?.teamAScore || 0),
-          teamBScore: manualWinner === 'B' ? (prev.scores?.teamBScore || 0) + 1 : (prev.scores?.teamBScore || 0),
+          teamAScore: (prev.scores?.teamAScore || 0) + teamAScoreAdd,
+          teamBScore: (prev.scores?.teamBScore || 0) + teamBScoreAdd,
           teamALevel: nextLevelA,
           teamBLevel: nextLevelB,
         }
