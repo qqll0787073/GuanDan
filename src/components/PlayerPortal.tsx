@@ -7,7 +7,7 @@ import {
   generateDecks, shuffleCards, sortCards, canBeat, analyzeCombination, makeBotMove, calculateGameScore, getNextLevel 
 } from '../utils/guandanEngine';
 import { 
-  User as UserIcon, LogOut, Video, VideoOff, Mic, MicOff, Users, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Shield, RefreshCw, Layers, SortAsc, HelpCircle, Eye, ChevronRight, Edit2, Play, Circle, Trophy, History
+  User as UserIcon, LogOut, Video, VideoOff, Mic, MicOff, Users, ArrowRight, ArrowLeft, ArrowUp, ArrowDown, Shield, RefreshCw, Layers, SortAsc, HelpCircle, Eye, ChevronRight, Edit2, Play, Circle, Trophy, History, Cpu
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -94,6 +94,7 @@ export default function PlayerPortal({
   const [cardRows, setCardRows] = useState<{ [cardId: string]: 1 | 2 }>({});
   const [seatedPlayers, setSeatedPlayers] = useState<{ id: string; displayName: string; seat: 0 | 1 | 2 | 3; team: 'A' | 'B'; isBot: boolean }[]>([]);
   const [autoWaitActive, setAutoWaitActive] = useState(false);
+  const [loungeMode, setLoungeMode] = useState<'choose' | 'wait' | null>(null);
 
   // Interactive panels
   const [showHistory, setShowHistory] = useState(false);
@@ -175,6 +176,7 @@ export default function PlayerPortal({
 
     // Set Room Info and transition to room view
     setSelectedRoomId(roomId);
+    setLoungeMode('choose');
 
     // Initialize seated players list (User is South / Seat 0)
     setSeatedPlayers([
@@ -213,9 +215,35 @@ export default function PlayerPortal({
     });
     updateRooms(updatedRooms);
     setSelectedRoomId(null);
+    setLoungeMode(null);
     setGame(null);
     setSelectedCards({});
     setShowHistory(false);
+  };
+
+  // Admin Reset Room
+  const handleResetRoom = (roomId: number) => {
+    const updatedRooms = rooms.map(r => {
+      if (r.id === roomId) {
+        return {
+          ...r,
+          currentPlayerCount: 0,
+          players: [],
+          status: 'Waiting' as const,
+        };
+      }
+      return r;
+    });
+    updateRooms(updatedRooms);
+    
+    // If current user is in this room, redirect them back to lobby
+    if (selectedRoomId === roomId) {
+      setSelectedRoomId(null);
+      setLoungeMode(null);
+      setGame(null);
+      setSelectedCards({});
+      setShowHistory(false);
+    }
   };
 
   // Start / Init game
@@ -493,9 +521,11 @@ export default function PlayerPortal({
       const updatedPlayers = prev.players.map(p => {
         if (p.seat === 0) {
           const realCardsOnly = p.cards.filter(c => c.value !== 'spacer');
+          const spacersOnly = p.cards.filter(c => c.value === 'spacer');
+          const sortedReal = sortCards(realCardsOnly, strategy, levelCard);
           return {
             ...p,
-            cards: sortCards(realCardsOnly, strategy, levelCard)
+            cards: [...sortedReal, ...spacersOnly]
           };
         }
         return p;
@@ -1043,7 +1073,8 @@ export default function PlayerPortal({
             }
             setDragOverCardId(null);
           }}
-          className={`w-12 h-18 sm:w-14 sm:h-22 bg-slate-900/60 rounded-xl border-2 border-dashed border-slate-700/60 flex flex-col items-center justify-between p-1 cursor-pointer relative group transition-all duration-200 ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
+          onClick={() => toggleSelectCard(card.id)}
+          className={`w-12 h-18 sm:w-14 sm:h-22 bg-slate-900/60 rounded-xl border-2 border-dashed flex flex-col items-center justify-between p-1 cursor-pointer relative group transition-all duration-200 ${isSel ? '-translate-y-4 ring-2 ring-emerald-500 shadow-emerald-500/20 border-emerald-500' : 'border-slate-700/60'} ${isDragged ? 'opacity-40' : ''} ${isDragOver ? 'border-emerald-400 scale-105' : ''}`}
           style={{ zIndex: globalIdx }}
           whileTap={{ scale: 0.95 }}
         >
@@ -1142,6 +1173,119 @@ export default function PlayerPortal({
           </span>
         </div>
       </motion.div>
+    );
+  };
+
+  const renderLoungeSeat = (player: typeof seatedPlayers[number] | undefined, seatIndex: 1 | 2 | 3) => {
+    if (!player) {
+      return (
+        <div className="border border-dashed border-slate-800 bg-slate-950/40 p-4 rounded-2xl w-36 text-center flex flex-col items-center justify-center min-h-[110px] space-y-2">
+          <span className="text-[10px] text-slate-600 italic font-mono uppercase tracking-wider">{language === 'zh' ? '等待玩家...' : 'Waiting...'}</span>
+          <button
+            onClick={() => {
+              const botNames = {
+                1: language === 'zh' ? '智多星电脑' : 'AlphaBot',
+                2: language === 'zh' ? '大将军对家' : 'OmegaBot (Partner)',
+                3: language === 'zh' ? '无双刀电脑' : 'SigmaBot'
+              };
+              setSeatedPlayers(prev => {
+                const next = prev.filter(p => p.seat !== seatIndex);
+                next.push({
+                  id: `bot-${seatIndex}-${Date.now()}`,
+                  displayName: botNames[seatIndex],
+                  seat: seatIndex,
+                  team: seatIndex === 2 ? ('A' as const) : ('B' as const),
+                  isBot: true
+                });
+                return next.sort((a, b) => a.seat - b.seat);
+              });
+            }}
+            className="text-[9px] font-bold text-teal-400 bg-teal-500/10 px-2.5 py-1 rounded-lg border border-teal-500/20 hover:bg-teal-500/25 transition uppercase"
+          >
+            + {language === 'zh' ? '电脑' : 'Bot'}
+          </button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="bg-slate-900 border border-slate-800 p-4 rounded-2xl w-36 text-center shadow-lg relative min-h-[110px] flex flex-col justify-between">
+        {/* Kick button */}
+        <button
+          onClick={() => handleKickPlayer(seatIndex)}
+          className="absolute top-1.5 right-1.5 text-slate-500 hover:text-red-400 transition"
+          title={language === 'zh' ? '踢出座位' : 'Kick player'}
+        >
+          <span className="text-xs">✕</span>
+        </button>
+        <div>
+          <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 mx-auto flex items-center justify-center mb-1.5">
+            <span className="text-[10px] font-bold text-slate-400 uppercase font-mono">
+              {player.isBot ? '🤖' : 'P'}
+            </span>
+          </div>
+          <span className="text-xs font-bold text-slate-200 block truncate">{player.displayName}</span>
+          <span className="text-[8px] font-mono text-slate-500 block uppercase mt-0.5">
+            {player.isBot ? (language === 'zh' ? '电脑机器人' : 'AI Bot') : (language === 'zh' ? '在线玩家' : 'Online Player')}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  const renderTrickPlayBox = (seatIndex: number) => {
+    if (!game) return null;
+    const act = getPlayerCurrentTrickPlay(seatIndex);
+    const isTheirTurn = game.activePlayerIndex === seatIndex;
+    const player = game.players[seatIndex];
+
+    if (player.hasFinished) {
+      return (
+        <div className="w-32 py-2 px-3 bg-slate-900/40 border border-slate-800 rounded-xl text-center flex flex-col items-center justify-center h-14">
+          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">
+            {language === 'zh' ? `已出完 (#${player.finishOrder})` : `Finished (#${player.finishOrder})`}
+          </span>
+        </div>
+      );
+    }
+
+    if (act) {
+      return (
+        <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg min-w-[120px] h-14 flex flex-col justify-center">
+          {act.isPass ? (
+            <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
+          ) : (
+            <div className="flex flex-col items-center">
+              <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
+              <div className="flex space-x-1 mt-1">
+                {act.cards.map((c, i) => (
+                  <span key={i} className={`text-[10px] font-black px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
+                    {c.value === 'red_joker' ? 'RJ' : c.value === 'black_joker' ? 'BJ' : c.value}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    if (isTheirTurn) {
+      return (
+        <div className="w-32 py-2 px-3 bg-teal-500/10 border border-teal-500/30 rounded-xl text-center flex flex-col items-center justify-center h-14 animate-pulse">
+          <span className="text-[10px] font-black text-teal-400 uppercase tracking-widest">
+            {language === 'zh' ? '思考中...' : 'Thinking...'}
+          </span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="w-32 py-2 px-3 border border-dashed border-slate-800 rounded-xl text-center flex flex-col items-center justify-center h-14 opacity-50">
+        <span className="text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+          {language === 'zh' ? '等待出牌' : 'Waiting...'}
+        </span>
+      </div>
     );
   };
 
@@ -1433,7 +1577,7 @@ export default function PlayerPortal({
                           </div>
                         </div>
 
-                        <div className="mt-5 pt-4 border-t border-slate-800">
+                        <div className="mt-5 pt-4 border-t border-slate-800 space-y-2">
                           <button
                             onClick={() => handleJoinRoom(room.id)}
                             disabled={room.currentPlayerCount >= 4}
@@ -1441,12 +1585,235 @@ export default function PlayerPortal({
                           >
                             {room.currentPlayerCount >= 4 ? t('gameInProgress') : t('joinRoom')}
                           </button>
+                          {currentUser && currentUser.role === 'admin' && (
+                            <button
+                              onClick={() => handleResetRoom(room.id)}
+                              className="w-full py-1.5 rounded-lg border border-red-500/30 hover:bg-red-500/20 text-red-400 text-[10px] font-bold uppercase transition flex items-center justify-center space-x-1"
+                            >
+                              <span>{language === 'zh' ? '管理员重置房间' : 'Admin Reset Room'}</span>
+                            </button>
+                          )}
                         </div>
                       </div>
                     );
                   })}
                 </div>
               </div>
+            </div>
+          ) : !game ? (
+            
+            /* LOUNGE SCREEN */
+            <div className="space-y-6">
+              {loungeMode === 'choose' ? (
+                <div className="max-w-4xl mx-auto space-y-8">
+                  {/* Back button */}
+                  <button
+                    onClick={handleLeaveRoom}
+                    className="text-xs font-mono font-bold text-slate-400 bg-slate-900 border border-slate-800 px-4 py-2 rounded-xl hover:text-white hover:border-slate-700 transition flex items-center space-x-1"
+                  >
+                    <span>← {language === 'zh' ? '返回大厅' : 'Back to Lobby'}</span>
+                  </button>
+
+                  <div className="text-center space-y-3">
+                    <h2 className="text-2xl font-black text-white tracking-tight">
+                      {language === 'zh' ? '准备进入掼蛋桌' : 'Prepare for Guandan Table'}
+                    </h2>
+                    <p className="text-sm text-slate-400 max-w-lg mx-auto">
+                      {language === 'zh' 
+                        ? '请选择您想要的游戏模式。您可以直接与电脑机器人打牌，也可以在大厅中等待其他玩家或好友加入。' 
+                        : 'Please select your preferred game mode. You can play directly with AI bots, or wait for other players to join.'}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
+                    {/* Option 1: Direct Play with Bots */}
+                    <motion.div
+                      whileHover={{ y: -4, scale: 1.01 }}
+                      onClick={() => {
+                        const botNames = {
+                          1: language === 'zh' ? '智多星电脑' : 'AlphaBot',
+                          2: language === 'zh' ? '大将军对家' : 'OmegaBot (Partner)',
+                          3: language === 'zh' ? '无双刀电脑' : 'SigmaBot'
+                        };
+                        const finalPlayers = [
+                          { id: currentUser.id, displayName: currentUser.displayName, seat: 0 as const, team: 'A' as const, isBot: false },
+                          { id: 'bot-1', displayName: botNames[1], seat: 1 as const, team: 'B' as const, isBot: true },
+                          { id: 'bot-2', displayName: botNames[2], seat: 2 as const, team: 'A' as const, isBot: true },
+                          { id: 'bot-3', displayName: botNames[3], seat: 3 as const, team: 'B' as const, isBot: true }
+                        ];
+                        setSeatedPlayers(finalPlayers);
+                        initGame(selectedRoomId, finalPlayers);
+                      }}
+                      className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-850 rounded-3xl p-8 cursor-pointer hover:border-emerald-500/50 transition-all flex flex-col justify-between h-[300px] text-left group shadow-xl"
+                    >
+                      <div className="space-y-4">
+                        <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 border border-emerald-500/20 group-hover:bg-emerald-500/20 transition-colors">
+                          <Cpu className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-xl font-bold text-white group-hover:text-emerald-400 transition-colors">
+                            {language === 'zh' ? '直接与电脑对战' : 'Play Directly with AI'}
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                            {language === 'zh' 
+                              ? '立即开始！系统将为您自动匹配三位智能电脑机器人（一位盟友、两位对手），让您无需等待即可畅快掼蛋。' 
+                              : 'Start instantly! The system will seat 3 smart AI bots (1 partner, 2 opponents) so you can enjoy playing without any wait.'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2 text-xs font-bold text-emerald-400 group-hover:underline">
+                        <span>{language === 'zh' ? '直接开局' : 'Start Playing'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </div>
+                    </motion.div>
+
+                    {/* Option 2: Wait for Players */}
+                    <motion.div
+                      whileHover={{ y: -4, scale: 1.01 }}
+                      onClick={() => {
+                        setLoungeMode('wait');
+                        setAutoWaitActive(true);
+                      }}
+                      className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-850 rounded-3xl p-8 cursor-pointer hover:border-teal-500/50 transition-all flex flex-col justify-between h-[300px] text-left group shadow-xl"
+                    >
+                      <div className="space-y-4">
+                        <div className="w-12 h-12 rounded-2xl bg-teal-500/10 flex items-center justify-center text-teal-400 border border-teal-500/20 group-hover:bg-teal-500/20 transition-colors">
+                          <Users className="w-6 h-6" />
+                        </div>
+                        <div>
+                          <h3 className="text-xl font-bold text-white group-hover:text-teal-400 transition-colors">
+                            {language === 'zh' ? '等待其他玩家加入' : 'Wait for Other Players'}
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+                            {language === 'zh' 
+                              ? '进入等待室。该房间在首页大厅中仍可见，其他在线玩家可以随时加入您的房间，共同组队约局玩牌。' 
+                              : 'Enter the waiting lounge. This room remains open and visible in the lobby for other players to join and team up with you.'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center space-x-2 text-xs font-bold text-teal-400 group-hover:underline">
+                        <span>{language === 'zh' ? '进入等待室' : 'Enter Waiting Room'}</span>
+                        <ArrowRight className="w-4 h-4" />
+                      </div>
+                    </motion.div>
+                  </div>
+                </div>
+              ) : (
+                <div className="max-w-4xl mx-auto space-y-8">
+                  {/* Header and Back/Leave buttons */}
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-900 border border-slate-800 px-6 py-4 rounded-2xl shadow-lg">
+                    <div className="flex items-center space-x-3">
+                      <button
+                        onClick={handleLeaveRoom}
+                        className="text-xs font-mono font-bold text-red-400 bg-red-500/10 px-3 py-1.5 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition"
+                      >
+                        ← {language === 'zh' ? '退出掼蛋室' : 'Exit Room'}
+                      </button>
+                      <div className="h-5 w-px bg-slate-800"></div>
+                      <div>
+                        <h3 className="text-sm font-bold text-white">
+                          {language === 'en' 
+                            ? SOLAR_TERMS[selectedRoomId - 1].nameEn 
+                            : SOLAR_TERMS[selectedRoomId - 1].nameZh} - {language === 'zh' ? '等待室' : 'Lobby'}
+                        </h3>
+                        <p className="text-xs text-slate-500 font-mono">
+                          {language === 'zh' ? `当前座位人数: ` : `Seated: `}
+                          <span className="text-teal-400 font-bold">{seatedPlayers.length} / 4</span>
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center space-x-2">
+                      <button
+                        onClick={handleFillAllBots}
+                        disabled={seatedPlayers.length >= 4}
+                        className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-300 text-xs font-bold rounded-xl transition border border-slate-700 flex items-center space-x-1"
+                      >
+                        <span>🤖 {language === 'zh' ? '一键加满电脑' : 'Fill with Bots'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Seating Layout Map */}
+                  <div className="bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-3xl p-8 shadow-xl text-center relative overflow-hidden">
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(20,184,166,0.04)_0%,transparent_70%)] pointer-events-none"></div>
+
+                    <span className="text-[10px] font-bold text-slate-500 font-mono tracking-widest uppercase mb-6 block">
+                      {language === 'zh' ? '· 掼蛋座位示意图 ·' : '· GUANDAN SEATING CHART ·'}
+                    </span>
+
+                    {/* 4 seats layout in a circle/cross */}
+                    <div className="grid grid-cols-3 gap-4 max-w-xl mx-auto py-6">
+                      {/* Row 1: NORTH (Partner - Seat 2) */}
+                      <div></div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase mb-1">{language === 'zh' ? '北座 (对家)' : 'North (Partner)'}</span>
+                        {(() => {
+                          const player = seatedPlayers.find(p => p.seat === 2);
+                          return renderLoungeSeat(player, 2);
+                        })()}
+                      </div>
+                      <div></div>
+
+                      {/* Row 2: WEST (Opponent - Seat 3) and EAST (Opponent - Seat 1) */}
+                      <div className="flex flex-col items-center justify-center">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase mb-1">{language === 'zh' ? '西座 (对手)' : 'West (Opponent)'}</span>
+                        {(() => {
+                          const player = seatedPlayers.find(p => p.seat === 3);
+                          return renderLoungeSeat(player, 3);
+                        })()}
+                      </div>
+                      <div className="flex items-center justify-center">
+                        <div className="w-16 h-16 rounded-full border border-teal-500/20 bg-teal-500/5 flex items-center justify-center font-bold text-teal-400 animate-pulse text-xs font-mono">
+                          GD
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-center justify-center">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase mb-1">{language === 'zh' ? '东座 (对手)' : 'East (Opponent)'}</span>
+                        {(() => {
+                          const player = seatedPlayers.find(p => p.seat === 1);
+                          return renderLoungeSeat(player, 1);
+                        })()}
+                      </div>
+
+                      {/* Row 3: SOUTH (Me - Seat 0) */}
+                      <div></div>
+                      <div className="flex flex-col items-center">
+                        <span className="text-[10px] font-mono text-slate-500 uppercase mb-1">{language === 'zh' ? '南座 (自己)' : 'South (Me)'}</span>
+                        <div className="bg-emerald-950/40 border border-emerald-500/30 p-4 rounded-2xl w-36 text-center shadow-lg relative">
+                          <div className="w-10 h-10 rounded-full bg-emerald-500/20 border border-emerald-500/40 mx-auto flex items-center justify-center mb-2">
+                            <span className="text-emerald-400 font-extrabold text-xs">ME</span>
+                          </div>
+                          <span className="text-xs font-bold text-emerald-400 block truncate">{currentUser.displayName}</span>
+                          <span className="text-[9px] bg-emerald-500/20 text-emerald-300 font-bold px-2 py-0.5 rounded-full mt-1.5 inline-block uppercase">Host</span>
+                        </div>
+                      </div>
+                      <div></div>
+                    </div>
+
+                    {/* Actions below chart */}
+                    <div className="mt-8 pt-6 border-t border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-4">
+                      <p className="text-xs text-slate-400 max-w-md text-left leading-relaxed">
+                        💡 <strong className="text-teal-400">{language === 'zh' ? '游戏规则: ' : 'Info: '}</strong>
+                        {language === 'zh' 
+                          ? '当所有4个座位都坐满玩家或电脑时，开始游戏按钮将激活。您可以点击空位上的添加电脑按钮，或者等待模拟玩家陆续加入。' 
+                          : 'The start game button activates when all 4 seats are full. You can manually fill spots with AI bots or wait for simulate players.'}
+                      </p>
+                      
+                      <button
+                        disabled={seatedPlayers.length < 4}
+                        onClick={() => {
+                          setAutoWaitActive(false);
+                          initGame(selectedRoomId, seatedPlayers);
+                        }}
+                        className={`px-8 py-3 rounded-xl font-black text-sm tracking-wide uppercase transition duration-300 ${seatedPlayers.length < 4 ? 'bg-slate-800 text-slate-600 cursor-not-allowed' : 'bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/10'}`}
+                      >
+                        🚀 {language === 'zh' ? '开始游戏 (满4人)' : 'Start Game (Full)'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             
@@ -1462,6 +1829,14 @@ export default function PlayerPortal({
                   >
                     ← {t('backToHome')}
                   </button>
+                  {currentUser && currentUser.role === 'admin' && (
+                    <button
+                      onClick={() => handleResetRoom(selectedRoomId!)}
+                      className="text-xs font-mono font-bold text-red-400 bg-red-500/10 px-3 py-1.5 rounded-lg border border-red-500/20 hover:bg-red-500/20 transition"
+                    >
+                      ⚠️ {language === 'zh' ? '管理员重置' : 'Admin Reset'}
+                    </button>
+                  )}
                   <div className="h-5 w-px bg-slate-800"></div>
                   <div>
                     <h3 className="text-base font-bold text-white">
@@ -1568,28 +1943,7 @@ export default function PlayerPortal({
 
                         {/* Top Seat last played display */}
                         <div className="h-16 mt-3 flex items-center justify-center">
-                          {(() => {
-                            const act = getPlayerCurrentTrickPlay(2);
-                            if (!act) return null;
-                            return (
-                              <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                                {act.isPass ? (
-                                  <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                                ) : (
-                                  <div className="flex flex-col items-center">
-                                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
-                                    <div className="flex space-x-1 mt-1">
-                                      {act.cards.map((c, i) => (
-                                        <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                          {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
+                          {renderTrickPlayBox(2)}
                         </div>
                       </div>
 
@@ -1616,28 +1970,7 @@ export default function PlayerPortal({
 
                           {/* West Seat last played display */}
                           <div className="h-16 mt-3 flex items-center justify-center">
-                            {(() => {
-                              const act = getPlayerCurrentTrickPlay(3);
-                              if (!act) return null;
-                              return (
-                                <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                                  {act.isPass ? (
-                                    <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                                  ) : (
-                                    <div className="flex flex-col items-center">
-                                      <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
-                                      <div className="flex space-x-1 mt-1">
-                                        {act.cards.map((c, i) => (
-                                          <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                            {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()}
+                            {renderTrickPlayBox(3)}
                           </div>
                         </div>
 
@@ -1701,28 +2034,7 @@ export default function PlayerPortal({
 
                           {/* East Seat last played display */}
                           <div className="h-16 mt-3 flex items-center justify-center">
-                            {(() => {
-                              const act = getPlayerCurrentTrickPlay(1);
-                              if (!act) return null;
-                              return (
-                                <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                                  {act.isPass ? (
-                                    <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                                  ) : (
-                                    <div className="flex flex-col items-center">
-                                      <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
-                                      <div className="flex space-x-1 mt-1">
-                                        {act.cards.map((c, i) => (
-                                          <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                            {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()}
+                            {renderTrickPlayBox(1)}
                           </div>
                         </div>
 
@@ -1732,28 +2044,7 @@ export default function PlayerPortal({
                       <div className="flex flex-col items-center">
                         {/* Human last played display */}
                         <div className="h-16 mb-2 flex items-center justify-center">
-                          {(() => {
-                            const act = getPlayerCurrentTrickPlay(0);
-                            if (!act) return null;
-                            return (
-                              <div className="bg-slate-900/95 border border-emerald-900/40 p-2 rounded-xl text-center shadow-lg">
-                                {act.isPass ? (
-                                  <span className="text-xs font-black text-slate-500 italic uppercase">PASS</span>
-                                ) : (
-                                  <div className="flex flex-col items-center">
-                                    <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-widest">{act.cardType}</span>
-                                    <div className="flex space-x-1 mt-1">
-                                      {act.cards.map((c, i) => (
-                                        <span key={i} className={`text-xs font-bold px-1.5 py-0.5 bg-white rounded shadow ${getSuitColor(c.suit)}`}>
-                                          {c.value === 'red_joker' || c.value === 'black_joker' ? 'J' : c.value}
-                                        </span>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })()}
+                          {renderTrickPlayBox(0)}
                         </div>
 
                         {/* Player Seat status and cards controls */}
