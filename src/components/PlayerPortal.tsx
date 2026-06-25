@@ -91,6 +91,7 @@ export default function PlayerPortal({
   const [sortStrategy, setSortStrategy] = useState<'rank' | 'suit' | 'combo'>('rank');
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dragOverCardId, setDragOverCardId] = useState<string | null>(null);
+  const [cardRows, setCardRows] = useState<{ [cardId: string]: 1 | 2 }>({});
 
   // Interactive panels
   const [showHistory, setShowHistory] = useState(false);
@@ -258,6 +259,41 @@ export default function PlayerPortal({
     setSelectedCards({});
   };
 
+  // Synchronize cardRows state when game player cards change
+  useEffect(() => {
+    if (!game) {
+      setCardRows({});
+      return;
+    }
+    const myCards = game.players[0].cards;
+    if (myCards.length === 0) return;
+
+    setCardRows(prev => {
+      let changed = false;
+      const nextRows = { ...prev };
+      
+      // Remove any old/played cards from state
+      const activeIds = new Set(myCards.map(c => c.id));
+      for (const id in nextRows) {
+        if (!activeIds.has(id)) {
+          delete nextRows[id];
+          changed = true;
+        }
+      }
+
+      // Add missing cards (defaulting to split 50/50 initially)
+      const midPoint = Math.ceil(myCards.length / 2);
+      myCards.forEach((c, idx) => {
+        if (!nextRows[c.id]) {
+          nextRows[c.id] = idx < midPoint ? 1 : 2;
+          changed = true;
+        }
+      });
+
+      return changed ? nextRows : prev;
+    });
+  }, [game?.players[0]?.cards]);
+
   // Re-deal cards
   const handleRedeal = () => {
     if (selectedRoomId) {
@@ -270,6 +306,7 @@ export default function PlayerPortal({
     if (!game) return;
     setSortStrategy(strategy);
     const levelCard = game.currentLevel;
+    setCardRows({});
 
     setGame(prev => {
       if (!prev) return null;
@@ -303,6 +340,19 @@ export default function PlayerPortal({
     if (dragIdx !== -1 && dropIdx !== -1 && dragIdx !== dropIdx) {
       const [draggedCard] = cards.splice(dragIdx, 1);
       cards.splice(dropIdx, 0, draggedCard);
+
+      // Update row assignment to match target card's row
+      setCardRows(prev => {
+        const targetRow = prev[targetId] || 1;
+        if (prev[draggedId] !== targetRow) {
+          return {
+            ...prev,
+            [draggedId]: targetRow
+          };
+        }
+        return prev;
+      });
+
       setGame(prev => {
         if (!prev) return null;
         const updatedPlayers = prev.players.map((p, idx) => {
@@ -318,45 +368,80 @@ export default function PlayerPortal({
 
   const handleCardDropToRow = (draggedId: string, rowNum: 1 | 2) => {
     if (!game) return;
+
+    // 1. Update the row assignment state
+    setCardRows(prev => ({
+      ...prev,
+      [draggedId]: rowNum
+    }));
+
+    // 2. Adjust position in master cards list
     const cards = [...game.players[0].cards];
     const dragIdx = cards.findIndex(c => c.id === draggedId);
-    if (dragIdx === -1) return;
+    if (dragIdx !== -1) {
+      const [draggedCard] = cards.splice(dragIdx, 1);
+      
+      const getRow = (id: string) => {
+        if (id === draggedId) return rowNum;
+        return cardRows[id] || 1;
+      };
 
-    const [draggedCard] = cards.splice(dragIdx, 1);
-    const midPoint = Math.ceil((cards.length + 1) / 2);
-    
-    if (rowNum === 1) {
-      const insertIdx = Math.max(0, midPoint - 1);
-      cards.splice(insertIdx, 0, draggedCard);
-    } else {
-      cards.push(draggedCard);
-    }
+      const rowCardIndices = cards
+        .map((c, idx) => ({ id: c.id, idx }))
+        .filter(item => getRow(item.id) === rowNum);
 
-    setGame(prev => {
-      if (!prev) return null;
-      const updatedPlayers = prev.players.map((p, idx) => {
-        if (idx === 0) {
-          return { ...p, cards };
+      if (rowCardIndices.length > 0) {
+        const lastIdxOfRow = rowCardIndices[rowCardIndices.length - 1].idx;
+        cards.splice(lastIdxOfRow + 1, 0, draggedCard);
+      } else {
+        if (rowNum === 1) {
+          cards.unshift(draggedCard);
+        } else {
+          cards.push(draggedCard);
         }
-        return p;
+      }
+
+      setGame(prev => {
+        if (!prev) return null;
+        const updatedPlayers = prev.players.map((p, idx) => {
+          if (idx === 0) {
+            return { ...p, cards };
+          }
+          return p;
+        });
+        return { ...prev, players: updatedPlayers };
       });
-      return { ...prev, players: updatedPlayers };
-    });
+    }
   };
 
   const handleMoveSelectedLeft = () => {
     if (!game) return;
     const cards = [...game.players[0].cards];
-    for (let i = 1; i < cards.length; i++) {
-      if (selectedCards[cards[i].id] && !selectedCards[cards[i - 1].id]) {
-        const temp = cards[i];
-        cards[i] = cards[i - 1];
-        cards[i - 1] = temp;
+    const row1Cards = cards.filter(c => (cardRows[c.id] || 1) === 1);
+    const row2Cards = cards.filter(c => (cardRows[c.id] || 1) === 2);
+
+    // Shift selected left in row1
+    for (let i = 1; i < row1Cards.length; i++) {
+      if (selectedCards[row1Cards[i].id] && !selectedCards[row1Cards[i - 1].id]) {
+        const temp = row1Cards[i];
+        row1Cards[i] = row1Cards[i - 1];
+        row1Cards[i - 1] = temp;
       }
     }
+
+    // Shift selected left in row2
+    for (let i = 1; i < row2Cards.length; i++) {
+      if (selectedCards[row2Cards[i].id] && !selectedCards[row2Cards[i - 1].id]) {
+        const temp = row2Cards[i];
+        row2Cards[i] = row2Cards[i - 1];
+        row2Cards[i - 1] = temp;
+      }
+    }
+
+    const newCards = [...row1Cards, ...row2Cards];
     setGame(prev => {
       if (!prev) return null;
-      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards: newCards } : p);
       return { ...prev, players: updatedPlayers };
     });
   };
@@ -364,16 +449,31 @@ export default function PlayerPortal({
   const handleMoveSelectedRight = () => {
     if (!game) return;
     const cards = [...game.players[0].cards];
-    for (let i = cards.length - 2; i >= 0; i--) {
-      if (selectedCards[cards[i].id] && !selectedCards[cards[i + 1].id]) {
-        const temp = cards[i];
-        cards[i] = cards[i + 1];
-        cards[i + 1] = temp;
+    const row1Cards = cards.filter(c => (cardRows[c.id] || 1) === 1);
+    const row2Cards = cards.filter(c => (cardRows[c.id] || 1) === 2);
+
+    // Shift selected right in row1
+    for (let i = row1Cards.length - 2; i >= 0; i--) {
+      if (selectedCards[row1Cards[i].id] && !selectedCards[row1Cards[i + 1].id]) {
+        const temp = row1Cards[i];
+        row1Cards[i] = row1Cards[i + 1];
+        row1Cards[i + 1] = temp;
       }
     }
+
+    // Shift selected right in row2
+    for (let i = row2Cards.length - 2; i >= 0; i--) {
+      if (selectedCards[row2Cards[i].id] && !selectedCards[row2Cards[i + 1].id]) {
+        const temp = row2Cards[i];
+        row2Cards[i] = row2Cards[i + 1];
+        row2Cards[i + 1] = temp;
+      }
+    }
+
+    const newCards = [...row1Cards, ...row2Cards];
     setGame(prev => {
       if (!prev) return null;
-      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards: newCards } : p);
       return { ...prev, players: updatedPlayers };
     });
   };
@@ -381,31 +481,31 @@ export default function PlayerPortal({
   const handleMoveSelectedToUpperRow = () => {
     if (!game) return;
     const cards = [...game.players[0].cards];
-    const midPoint = Math.ceil(cards.length / 2);
-    
-    const selectedLowerIndices: number[] = [];
-    for (let i = midPoint; i < cards.length; i++) {
-      if (selectedCards[cards[i].id]) {
-        selectedLowerIndices.push(i);
-      }
-    }
+    const row1Cards = cards.filter(c => (cardRows[c.id] || 1) === 1);
+    const row2Cards = cards.filter(c => (cardRows[c.id] || 1) === 2);
 
-    if (selectedLowerIndices.length === 0) return;
+    // Find selected cards in row 2
+    const toMove = row2Cards.filter(c => selectedCards[c.id]);
+    if (toMove.length === 0) return;
 
-    const movedCards: Card[] = [];
-    for (let i = selectedLowerIndices.length - 1; i >= 0; i--) {
-      const idx = selectedLowerIndices[i];
-      const [card] = cards.splice(idx, 1);
-      movedCards.unshift(card);
-    }
+    // Remove from row 2
+    const remainingRow2 = row2Cards.filter(c => !selectedCards[c.id]);
+    // Add to row 1 (at the end)
+    const newRow1 = [...row1Cards, ...toMove];
 
-    const newInsertPoint = Math.ceil((cards.length + movedCards.length) / 2) - movedCards.length;
-    const insertIdx = Math.max(0, newInsertPoint);
-    cards.splice(insertIdx, 0, ...movedCards);
+    // Update cardRows state for moved cards
+    setCardRows(prev => {
+      const next = { ...prev };
+      toMove.forEach(c => {
+        next[c.id] = 1;
+      });
+      return next;
+    });
 
+    const newCards = [...newRow1, ...remainingRow2];
     setGame(prev => {
       if (!prev) return null;
-      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards: newCards } : p);
       return { ...prev, players: updatedPlayers };
     });
   };
@@ -413,29 +513,31 @@ export default function PlayerPortal({
   const handleMoveSelectedToLowerRow = () => {
     if (!game) return;
     const cards = [...game.players[0].cards];
-    const midPoint = Math.ceil(cards.length / 2);
+    const row1Cards = cards.filter(c => (cardRows[c.id] || 1) === 1);
+    const row2Cards = cards.filter(c => (cardRows[c.id] || 1) === 2);
 
-    const selectedUpperIndices: number[] = [];
-    for (let i = 0; i < midPoint; i++) {
-      if (selectedCards[cards[i].id]) {
-        selectedUpperIndices.push(i);
-      }
-    }
+    // Find selected cards in row 1
+    const toMove = row1Cards.filter(c => selectedCards[c.id]);
+    if (toMove.length === 0) return;
 
-    if (selectedUpperIndices.length === 0) return;
+    // Remove from row 1
+    const remainingRow1 = row1Cards.filter(c => !selectedCards[c.id]);
+    // Add to row 2 (at the beginning)
+    const newRow2 = [...toMove, ...row2Cards];
 
-    const movedCards: Card[] = [];
-    for (let i = selectedUpperIndices.length - 1; i >= 0; i--) {
-      const idx = selectedUpperIndices[i];
-      const [card] = cards.splice(idx, 1);
-      movedCards.unshift(card);
-    }
+    // Update cardRows state for moved cards
+    setCardRows(prev => {
+      const next = { ...prev };
+      toMove.forEach(c => {
+        next[c.id] = 2;
+      });
+      return next;
+    });
 
-    cards.push(...movedCards);
-
+    const newCards = [...remainingRow1, ...newRow2];
     setGame(prev => {
       if (!prev) return null;
-      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards } : p);
+      const updatedPlayers = prev.players.map((p, idx) => idx === 0 ? { ...p, cards: newCards } : p);
       return { ...prev, players: updatedPlayers };
     });
   };
@@ -1383,9 +1485,8 @@ export default function PlayerPortal({
                         <div className="w-full overflow-x-auto pb-4 px-4 flex flex-col items-center space-y-4">
                           {(() => {
                             const cards = game.players[0].cards;
-                            const midPoint = Math.ceil(cards.length / 2);
-                            const row1Cards = cards.slice(0, midPoint);
-                            const row2Cards = cards.slice(midPoint);
+                            const row1Cards = cards.filter(c => (cardRows[c.id] || 1) === 1);
+                            const row2Cards = cards.filter(c => (cardRows[c.id] || 1) === 2);
 
                             return (
                               <>
