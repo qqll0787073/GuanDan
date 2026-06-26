@@ -35,7 +35,57 @@ export default function AdminPortal({
   const [adminPassword, setAdminPassword] = useState('');
   const [adminError, setAdminError] = useState('');
 
-  const [activeTab, setActiveTab] = useState<'approvals' | 'players' | 'rooms' | 'records'>('approvals');
+  const [activeTab, setActiveTab] = useState<'approvals' | 'players' | 'rooms' | 'records' | 'admins'>('approvals');
+
+  // Load administrators list from localStorage
+  const [adminsList, setAdminsList] = useState<{email: string; name: string; password?: string; createdAt: string}[]>(() => {
+    const saved = localStorage.getItem('guandan_admins_v1');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        // Fallback
+      }
+    }
+    const defaultList = [{ email: 'admin@guandan.com', name: 'Super Admin', password: 'admin123', createdAt: new Date().toISOString() }];
+    localStorage.setItem('guandan_admins_v1', JSON.stringify(defaultList));
+    return defaultList;
+  });
+
+  const [newAdminName, setNewAdminName] = useState('');
+  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminPass, setNewAdminPass] = useState('');
+  const [adminFormError, setAdminFormError] = useState('');
+  const [adminFormSuccess, setAdminFormSuccess] = useState('');
+
+  const handleAddAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAdminFormError('');
+    setAdminFormSuccess('');
+
+    const emailLower = newAdminEmail.trim().toLowerCase();
+    if (adminsList.some(a => a.email.toLowerCase() === emailLower)) {
+      setAdminFormError(language === 'zh' ? '该邮箱已被注册为管理员' : 'This email is already an administrator.');
+      return;
+    }
+
+    const newAdmin = {
+      name: newAdminName.trim(),
+      email: emailLower,
+      password: newAdminPass,
+      createdAt: new Date().toISOString()
+    };
+
+    const nextList = [...adminsList, newAdmin];
+    setAdminsList(nextList);
+    localStorage.setItem('guandan_admins_v1', JSON.stringify(nextList));
+
+    setNewAdminName('');
+    setNewAdminEmail('');
+    setNewAdminPass('');
+    setAdminFormSuccess(language === 'zh' ? '管理员创建成功！' : 'Administrator created successfully!');
+  };
+
   const [searchQuery, setSearchQuery] = useState('');
   const [contextMenu, setContextMenu] = useState<{
     visible: boolean;
@@ -69,7 +119,8 @@ export default function AdminPortal({
   // Simple admin credentials check
   const handleAdminLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (adminEmail === 'admin@guandan.com' && adminPassword === 'admin123') {
+    const matched = adminsList.find(a => a.email.toLowerCase() === adminEmail.toLowerCase() && a.password === adminPassword);
+    if (matched) {
       setIsAdminLoggedIn(true);
       setAdminError('');
     } else {
@@ -209,6 +260,14 @@ export default function AdminPortal({
                 >
                   <FileText className="w-4 h-4" />
                   <span>{t('gameRecords')}</span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('admins')}
+                  className={`w-full flex items-center space-x-3 px-4 py-2.5 rounded-xl text-xs font-semibold transition ${activeTab === 'admins' ? 'bg-teal-500 text-slate-950 font-black shadow-md' : 'text-slate-400 hover:text-white hover:bg-slate-800/50'}`}
+                >
+                  <Key className="w-4 h-4" />
+                  <span>{language === 'zh' ? '管理员管理' : 'Admins Management'}</span>
                 </button>
               </nav>
             </div>
@@ -519,6 +578,108 @@ export default function AdminPortal({
                       )}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {/* TAB CONTENT: 5. ADMINISTRATORS MANAGEMENT */}
+            {activeTab === 'admins' && (
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fadeIn">
+                {/* Add Admin Form */}
+                <div className="lg:col-span-1 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <h3 className="text-base font-bold text-slate-200">
+                    {language === 'zh' ? '添加新管理员' : 'Add New Administrator'}
+                  </h3>
+                  
+                  {adminFormError && (
+                    <div className="bg-red-500/10 border border-red-500/20 text-red-400 text-xs px-3 py-2 rounded-xl">
+                      {adminFormError}
+                    </div>
+                  )}
+                  {adminFormSuccess && (
+                    <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs px-3 py-2 rounded-xl">
+                      {adminFormSuccess}
+                    </div>
+                  )}
+
+                  <form onSubmit={handleAddAdmin} className="space-y-4">
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        {language === 'zh' ? '管理员姓名' : 'Full Name'}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={newAdminName}
+                        onChange={(e) => setNewAdminName(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 focus:ring-1 focus:ring-teal-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 transition"
+                        placeholder="John Doe"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        {language === 'zh' ? '邮箱地址' : 'Email Address'}
+                      </label>
+                      <input
+                        type="email"
+                        required
+                        value={newAdminEmail}
+                        onChange={(e) => setNewAdminEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 focus:ring-1 focus:ring-teal-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 transition"
+                        placeholder="newadmin@guandan.com"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">
+                        {language === 'zh' ? '管理登录密码' : 'Password'}
+                      </label>
+                      <input
+                        type="password"
+                        required
+                        value={newAdminPass}
+                        onChange={(e) => setNewAdminPass(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 focus:border-teal-500 focus:ring-1 focus:ring-teal-500/30 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-600 transition"
+                        placeholder="••••••••"
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      className="w-full py-2.5 bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold rounded-xl text-xs uppercase tracking-wider transition shadow-lg shadow-teal-500/5 hover:shadow-teal-500/10"
+                    >
+                      {language === 'zh' ? '确认创建管理员' : 'Create Administrator'}
+                    </button>
+                  </form>
+                </div>
+
+                {/* Admins list */}
+                <div className="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+                  <h3 className="text-base font-bold text-slate-200">
+                    {language === 'zh' ? '当前管理员列表' : 'Administrator List'}
+                  </h3>
+                  
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm text-slate-400">
+                      <thead className="bg-slate-950 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-800">
+                        <tr>
+                          <th className="px-4 py-3">{language === 'zh' ? '姓名' : 'Name'}</th>
+                          <th className="px-4 py-3">{language === 'zh' ? '账号邮箱' : 'Email'}</th>
+                          <th className="px-4 py-3">{language === 'zh' ? '创建时间' : 'Created At'}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800">
+                        {adminsList.map((a) => (
+                          <tr key={a.email} className="hover:bg-slate-800/30 transition text-xs font-mono">
+                            <td className="px-4 py-3 font-semibold text-slate-200">{a.name}</td>
+                            <td className="px-4 py-3 text-slate-300">{a.email}</td>
+                            <td className="px-4 py-3 text-slate-500">{new Date(a.createdAt).toLocaleString()}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}

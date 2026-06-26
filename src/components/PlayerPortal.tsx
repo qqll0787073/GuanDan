@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   User, Room, Card, PlayAction, GameState, ScoreRecord, Suit 
 } from '../types';
@@ -156,6 +156,55 @@ export default function PlayerPortal({
   // WebRTC Simulation State
   const [micActive, setMicActive] = useState(true);
   const [camActive, setCamActive] = useState(true);
+
+  const localVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+
+  // Activate and control the WebRTC webcam and microphone
+  useEffect(() => {
+    if (camActive) {
+      navigator.mediaDevices.getUserMedia({ 
+        video: { width: 160, height: 120 }, 
+        audio: true 
+      })
+      .then(stream => {
+        setLocalStream(stream);
+        // Ensure standard audio state matches micActive immediately
+        stream.getAudioTracks().forEach(track => {
+          track.enabled = micActive;
+        });
+      })
+      .catch(err => {
+        console.warn("Could not start local video stream:", err);
+      });
+    } else {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+        setLocalStream(null);
+      }
+    }
+    return () => {
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [camActive]);
+
+  // Synchronize stream target reference when rendering or changing stream
+  useEffect(() => {
+    if (localVideoRef.current && localStream) {
+      localVideoRef.current.srcObject = localStream;
+    }
+  }, [localStream, camActive]);
+
+  // Handle live toggle for microphone
+  useEffect(() => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = micActive;
+      });
+    }
+  }, [micActive, localStream]);
 
   // Scoring details
   const [scoringMode, setScoringMode] = useState<'manual' | 'auto'>('auto');
@@ -1785,6 +1834,113 @@ export default function PlayerPortal({
     );
   };
 
+  const renderPlayerVideo = (seatIndex: number) => {
+    // If the room doesn't support video or if game doesn't exist, return null
+    if (!game) return null;
+
+    const player = game.players[seatIndex];
+    if (!player) return null;
+
+    const isSelf = seatIndex === 0;
+    const isVoiceOn = micActive;
+    const isVideoOn = camActive;
+
+    // Simulated talking if bot is active player in play state
+    const isTalking = !isSelf && game.activePlayerIndex === seatIndex && game.status === 'playing';
+
+    return (
+      <div className="relative w-36 h-24 bg-slate-950 border border-slate-850 rounded-2xl overflow-hidden shadow-md flex items-center justify-center group">
+        {isSelf ? (
+          // Real User Camera Feed
+          isVideoOn ? (
+            <video
+              ref={localVideoRef}
+              autoPlay
+              playsInline
+              muted
+              className="w-full h-full object-cover rounded-2xl"
+            />
+          ) : (
+            <div className="flex flex-col items-center justify-center text-slate-600">
+              <VideoOff className="w-6 h-6 mb-1 text-red-500/50" />
+              <span className="text-[9px] font-mono tracking-wider">CAMERA MUTED</span>
+            </div>
+          )
+        ) : (
+          // Simulated Bot Video Feed
+          isVideoOn ? (
+            <div className="relative w-full h-full flex items-center justify-center bg-slate-900/60 overflow-hidden">
+              {/* Nice camera styling/scanlines */}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-black/20 pointer-events-none z-10"></div>
+              
+              {/* Bot Avatar or dynamic representation */}
+              <div className="relative z-10 flex flex-col items-center space-y-1.5">
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center border transition-all duration-300 ${isTalking ? 'bg-teal-500/20 border-teal-400 scale-105 shadow-lg shadow-teal-500/20' : 'bg-slate-850 border-slate-700'}`}>
+                  <span className="text-xs font-black text-slate-300 font-mono">
+                    {seatIndex === 1 ? 'P2' : seatIndex === 2 ? 'P3' : 'P4'}
+                  </span>
+                </div>
+                {/* Simulated active speech bars */}
+                {isTalking && (
+                  <div className="flex items-center space-x-0.5 h-3">
+                    <span className="w-0.5 h-1.5 bg-teal-400 rounded animate-[pulse_0.8s_infinite]"></span>
+                    <span className="w-0.5 h-2.5 bg-teal-400 rounded animate-[pulse_0.5s_infinite_0.1s]"></span>
+                    <span className="w-0.5 h-1.5 bg-teal-400 rounded animate-[pulse_0.7s_infinite_0.2s]"></span>
+                  </div>
+                )}
+              </div>
+
+              {/* Grid scanning background */}
+              <div className="absolute inset-0 opacity-10 bg-[linear-gradient(rgba(18,185,129,0.15)_1px,transparent_1px),linear-gradient(90deg,rgba(18,185,129,0.15)_1px,transparent_1px)] bg-[size:8px_8px] pointer-events-none"></div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center text-slate-600">
+              <VideoOff className="w-6 h-6 mb-1 text-slate-700" />
+              <span className="text-[9px] font-mono tracking-wider text-slate-700">OFFLINE</span>
+            </div>
+          )
+        )}
+
+        {/* Video Overlays (REC indicator, Name, Mic badge) */}
+        {isVideoOn && (
+          <>
+            {/* Blinking REC indicator */}
+            <div className="absolute top-2 left-2 flex items-center space-x-1 bg-slate-950/60 px-1.5 py-0.5 rounded-full text-[8px] font-mono tracking-tight font-bold text-white z-20 border border-slate-800/40">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
+              <span>LIVE</span>
+            </div>
+
+            {/* Mic Overlay badge */}
+            <div className="absolute bottom-2 right-2 z-20">
+              {isSelf ? (
+                isVoiceOn ? (
+                  <span className="bg-emerald-500/25 border border-emerald-500/40 p-1 rounded-lg text-emerald-400 block">
+                    <Mic className="w-3 h-3" />
+                  </span>
+                ) : (
+                  <span className="bg-red-500/25 border border-red-500/40 p-1 rounded-lg text-red-400 block">
+                    <MicOff className="w-3 h-3" />
+                  </span>
+                )
+              ) : (
+                // Bot mic indicator: active when talking, muted when not
+                isVoiceOn ? (
+                  <span className={`p-1 rounded-lg border transition-colors block ${isTalking ? 'bg-teal-500/25 border-teal-400 text-teal-400' : 'bg-slate-850/60 border-slate-800 text-slate-500'}`}>
+                    <Mic className="w-3 h-3" />
+                  </span>
+                ) : (
+                  <span className="bg-red-500/25 border border-red-500/40 p-1 rounded-lg text-red-400 block">
+                    <MicOff className="w-3 h-3" />
+                  </span>
+                )
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   const renderTrickPlayBox = (seatIndex: number) => {
     if (!game) return null;
     const act = getPlayerCurrentTrickPlay(seatIndex);
@@ -2338,7 +2494,7 @@ export default function PlayerPortal({
                       whileHover={{ y: -4, scale: 1.01 }}
                       onClick={() => {
                         setLoungeMode('wait');
-                        setAutoWaitActive(true);
+                        setAutoWaitActive(false);
                       }}
                       className="bg-gradient-to-br from-slate-900 to-slate-950 border border-slate-850 rounded-3xl p-8 cursor-pointer hover:border-teal-500/50 transition-all flex flex-col justify-between h-[300px] text-left group shadow-xl"
                     >
@@ -2607,7 +2763,8 @@ export default function PlayerPortal({
                   {game && (
                     <>
                       {/* TOP SEAT (PARTNER - North) */}
-                      <div className="flex flex-col items-center">
+                      <div className="flex flex-col items-center space-y-2">
+                        {renderPlayerVideo(2)}
                         <div className="relative flex flex-col items-center bg-slate-900/80 border border-slate-800 p-3 rounded-2xl w-44 shadow-lg text-center">
                           {game.activePlayerIndex === 2 && (
                             <span className="absolute -top-1.5 px-2 py-0.5 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full uppercase tracking-wider animate-pulse">
@@ -2634,7 +2791,8 @@ export default function PlayerPortal({
                       <div className="flex items-center justify-between my-2">
                         
                         {/* WEST SEAT (Bot 3 - Team B) */}
-                        <div className="flex flex-col items-center">
+                        <div className="flex flex-col items-center space-y-2">
+                          {renderPlayerVideo(3)}
                           <div className="relative flex flex-col items-center bg-slate-900/80 border border-slate-800 p-3 rounded-2xl w-36 shadow-lg text-center">
                             {game.activePlayerIndex === 3 && (
                               <span className="absolute -top-1.5 px-2 py-0.5 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full uppercase tracking-wider animate-pulse">
@@ -2828,7 +2986,8 @@ export default function PlayerPortal({
                         )}
 
                         {/* EAST SEAT (Bot 1 - Team B) */}
-                        <div className="flex flex-col items-center">
+                        <div className="flex flex-col items-center space-y-2">
+                          {renderPlayerVideo(1)}
                           <div className="relative flex flex-col items-center bg-slate-900/80 border border-slate-800 p-3 rounded-2xl w-36 shadow-lg text-center">
                             {game.activePlayerIndex === 1 && (
                               <span className="absolute -top-1.5 px-2 py-0.5 bg-emerald-500 text-slate-950 text-[9px] font-black rounded-full uppercase tracking-wider animate-pulse">
@@ -2854,11 +3013,14 @@ export default function PlayerPortal({
                       </div>
 
                       {/* BOTTOM SEAT (YOU - South) */}
-                      <div className="flex flex-col items-center">
+                      <div className="flex flex-col items-center space-y-2">
                         {/* Human last played display */}
                         <div className="h-16 mb-2 flex items-center justify-center">
                           {renderTrickPlayBox(0)}
                         </div>
+
+                        {/* South User camera feed right above controls bar */}
+                        {renderPlayerVideo(0)}
 
                         {/* Player Seat status and cards controls */}
                         <div className="relative flex items-center justify-between bg-slate-900 border border-slate-850 px-6 py-4 rounded-2xl w-full max-w-2xl shadow-xl">
@@ -3122,33 +3284,41 @@ export default function PlayerPortal({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800">
-                      {scoresHistory.length > 0 ? (
-                        scoresHistory.map((record) => (
-                          <tr key={record.id} className="hover:bg-slate-800/50 transition font-mono text-xs">
-                            <td className="px-4 py-3 font-semibold text-slate-200">{record.roomName}</td>
-                            <td className="px-4 py-3 text-slate-500">{record.date}</td>
-                            <td className="px-4 py-3">
-                              <span className="text-emerald-400 font-bold">+{record.teamAScoreChange}</span>
-                              <span className="text-slate-500 text-[10px] ml-1">({record.teamAFinalLevel})</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className="text-emerald-400 font-bold">+{record.teamBScoreChange}</span>
-                              <span className="text-slate-500 text-[10px] ml-1">({record.teamBFinalLevel})</span>
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${record.winningTeam === 'A' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
-                                Team {record.winningTeam}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3 text-[10px] uppercase font-bold text-slate-500">{record.scoringMode}</td>
-                            <td className="px-4 py-3 text-slate-400 italic max-w-xs truncate">{record.notes || '-'}</td>
+                      {(() => {
+                        const currentRoomZh = selectedRoomId ? SOLAR_TERMS[selectedRoomId - 1].nameZh : '';
+                        const currentRoomEn = selectedRoomId ? SOLAR_TERMS[selectedRoomId - 1].nameEn : '';
+                        const filteredHistory = scoresHistory
+                          .filter(record => record.roomName === currentRoomZh || record.roomName === currentRoomEn || record.roomName.includes(currentRoomZh) || record.roomName.includes(currentRoomEn))
+                          .slice(0, 3);
+
+                        return filteredHistory.length > 0 ? (
+                          filteredHistory.map((record) => (
+                            <tr key={record.id} className="hover:bg-slate-800/50 transition font-mono text-xs">
+                              <td className="px-4 py-3 font-semibold text-slate-200">{record.roomName}</td>
+                              <td className="px-4 py-3 text-slate-500">{record.date}</td>
+                              <td className="px-4 py-3">
+                                <span className="text-emerald-400 font-bold">+{record.teamAScoreChange}</span>
+                                <span className="text-slate-500 text-[10px] ml-1">({record.teamAFinalLevel})</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className="text-emerald-400 font-bold">+{record.teamBScoreChange}</span>
+                                <span className="text-slate-500 text-[10px] ml-1">({record.teamBFinalLevel})</span>
+                              </td>
+                              <td className="px-4 py-3">
+                                <span className={`px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${record.winningTeam === 'A' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}`}>
+                                  Team {record.winningTeam}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3 text-[10px] uppercase font-bold text-slate-500">{record.scoringMode}</td>
+                              <td className="px-4 py-3 text-slate-400 italic max-w-xs truncate">{record.notes || '-'}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={7} className="px-4 py-8 text-center text-slate-500 italic">No games recorded yet for this room.</td>
                           </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={7} className="px-4 py-8 text-center text-slate-500 italic">No games recorded yet.</td>
-                        </tr>
-                      )}
+                        );
+                      })()}
                     </tbody>
                   </table>
                 </div>
