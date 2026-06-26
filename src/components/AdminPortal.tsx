@@ -16,6 +16,7 @@ interface AdminPortalProps {
   onReactivateUser: (userId: string) => void;
   onResetPassword: (userId: string) => void;
   roomsStatusUpdate: (updatedRooms: Room[]) => void;
+  onLogout?: () => void;
 }
 
 export default function AdminPortal({
@@ -29,6 +30,7 @@ export default function AdminPortal({
   onReactivateUser,
   onResetPassword,
   roomsStatusUpdate,
+  onLogout,
 }: AdminPortalProps) {
   const [isAdminLoggedIn, setIsAdminLoggedIn] = useState(false);
   const [adminEmail, setAdminEmail] = useState('');
@@ -189,12 +191,6 @@ export default function AdminPortal({
                   className="w-full bg-slate-950 border border-slate-800 px-4 py-2.5 rounded-xl focus:border-teal-500 focus:outline-none text-white text-sm"
                 />
               </div>
-              
-              <div className="bg-slate-950/80 p-3 rounded-lg border border-slate-850/80 text-[10px] text-slate-500 space-y-1">
-                <div>🔑 Test Credentials:</div>
-                <div>Email: <strong className="text-teal-400 font-mono">admin@guandan.com</strong></div>
-                <div>Pass: <strong className="text-teal-400 font-mono">admin123</strong></div>
-              </div>
 
               <button
                 type="submit"
@@ -274,7 +270,10 @@ export default function AdminPortal({
 
             <div className="p-6 border-t border-slate-800">
               <button
-                onClick={() => setIsAdminLoggedIn(false)}
+                onClick={() => {
+                  setIsAdminLoggedIn(false);
+                  if (onLogout) onLogout();
+                }}
                 className="w-full py-2 bg-slate-950 hover:bg-slate-850 text-slate-400 hover:text-red-400 transition text-xs font-bold rounded-xl border border-slate-800"
               >
                 {t('adminLogout')}

@@ -251,7 +251,7 @@ export default function App() {
             
             <div className="text-center mb-16 space-y-4">
               <h2 className="text-4xl md:text-5xl font-black tracking-tight text-white">
-                {language === 'zh' ? '四人结对竞赛 · 掼响二十四节气' : 'Four-Player Team Poker · 24 Solar Terms'}
+                {language === 'zh' ? '掼响二十四节气' : '24 Solar Terms Guandan'}
               </h2>
               <p className="text-base text-slate-400 max-w-xl mx-auto leading-relaxed">
                 {language === 'zh' 
@@ -380,6 +380,7 @@ export default function App() {
             onReactivateUser={handleReactivateUser}
             onResetPassword={handleResetPassword}
             roomsStatusUpdate={handleUpdateRooms}
+            onLogout={() => setPortal('home')}
           />
         </div>
       )}
